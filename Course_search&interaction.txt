@@ -1,0 +1,82 @@
+1. For Signup:
+http://127.0.0.1:8000/signup
+POST:
+{
+    "first_name": "John",
+    "last_name": "Doe",
+    "email": "john@example.com",
+    "phone_number": "1234567890",
+    "password": "your_secure_password"
+}
+
+2. For Login:
+http://127.0.0.1:8000/login:
+{
+    "email": "john@example.com",
+    "password": "your_secure_password"
+}
+
+
+3. For User profile creation:
+The user profile cant be created if the userid and course id is same
+ONly if the course is different the data can be saved in the user profile
+
+POST
+{
+  "user_id": 123,
+  "course_id": 456,
+  "course_name": "Python for Beginners",
+  "course_description": "Learn Python from scratch",
+  "skills": "Python, Programming",
+  "difficulty_level": "Beginner",
+  "course_rating": 4.5
+}
+
+4. For User profile search:
+GET:
+http://127.0.0.1:8000/profile/?user_id=123
+
+
+
+5. For Course search:
+GET:
+http://127.0.0.1:8000/search/?name=python&description=django&difficulty_level=beginner&min_rating=4
+
+6. For Course Recommend:
+With reference to the user profile and user interation the courses will be recommended to the user (userid)
+GET:http://127.0.0.1:8000/recommend/?user_id=89
+
+
+
+7. For user interation:
+To save the users rating of the course, User will rate the course and we can use this interation history to recommend the courses.
+POST:
+{
+  "user_id": "89",
+  "course_id": "456",
+  "interaction_type": "rate" #or "view" for rating
+  "rating": 4.5 #for rating, for view we can set interation type to view or we can use the course view api on last.
+}
+
+
+
+8. For interation history:
+History of the view and ratings by the users.
+GET:
+http://127.0.0.1:8000/interaction/history/?user_id=89
+
+
+
+9. For fetching popular courses:
+Based on the user interation history we will fetch the pouplar course right now, it is dynamic and will be chnaged realtime:
+
+GET:
+http://127.0.0.1:8000/popular-courses/
+
+
+10. Course Views:
+User views the course and the interation will be updated on database,
+Also the interation can be used for the popular courses too.
+
+GET:
+http://127.0.0.1:8000/courses/188/?user_id=89
