@@ -23,73 +23,90 @@ import json
 class SearchCourseView(APIView):
     def get(self, request):
         # Get search parameters from query
-        name = request.query_params.get('name', '')
-        description = request.query_params.get('description', '')
-        difficulty_level = request.query_params.get('difficulty_level')
+        name = request.query_params.get('name', '').strip()
+        description = request.query_params.get('description', '').strip()
+        difficulty_level = request.query_params.get('difficulty_level', '').strip()
         min_rating = request.query_params.get('min_rating')
+
+        # If no search parameters provided, return empty result
+        if not any([name, description, difficulty_level, min_rating]):
+            return Response({
+                "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+                "recommendations": []
+            }, status=status.HTTP_200_OK)
 
         try:
             # Start with the base queryset
             queryset = Course.objects.all()
 
-            # Convert queryset to DataFrame
+            # Apply Django ORM filters first
+            if difficulty_level:
+                queryset = queryset.filter(difficulty__iexact=difficulty_level)
+            if min_rating:
+                try:
+                    min_rating = float(min_rating)
+                    queryset = queryset.filter(rating__gte=min_rating)
+                except ValueError:
+                    pass
+
+            # Convert filtered queryset to DataFrame
             df = pd.DataFrame.from_records(queryset.values(
                 'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description'
             ))
 
-            # Clean and process the data if necessary
+            if df.empty:
+                return Response({
+                    "message": "No courses found matching your criteria",
+                    "recommendations": []
+                }, status=status.HTTP_200_OK)
+
+            # Clean and process the data
             df = clean_and_process_data(df)
             recommended_df = df.copy()
 
-            # Search by name or description (TF-IDF Vectorization)
+            # Search by name or description using TF-IDF
             if name or description:
                 search_text = " ".join(filter(None, [name, description]))
 
-                # Apply a combined search text field for TF-IDF vectorization
+                # Create search text field for TF-IDF
                 df["search_text_field"] = df.apply(
-                    lambda x: ' '.join([str(x['name']) * 3, str(x['description']), str(x['university'])]), axis=1
+                    lambda x: ' '.join([
+                        str(x['name'] or '') * 3,
+                        str(x['description'] or ''),
+                        str(x['university'] or '')
+                    ]), axis=1
                 )
                 df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
 
-                # Perform TF-IDF Vectorization
+                # TF-IDF Vectorization
                 vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
                 vectors = vectorizer.fit_transform(df["search_text_field"])
 
-                # Get recommended indices based on the search text
+                # Get recommended indices
                 recommended_indices = books_id_recommended(search_text, vectorizer, vectors, number_of_recommendation=50)
-
-                # Filter the recommended DataFrame
                 recommended_df = df.iloc[recommended_indices]
 
-            # Apply difficulty filter if provided
-            if difficulty_level:
-                recommended_df = recommended_df[
-                    recommended_df['difficulty'].str.lower() == difficulty_level.lower()
-                ]
-
-            # Apply min_rating filter if provided
-            if min_rating:
-                try:
-                    min_rating = float(min_rating)
-                    recommended_df = recommended_df[recommended_df['rating'] >= min_rating]
-                except ValueError:
-                    pass  # Ignore invalid ratings
-
-            # If no results match, return a 404 message
+            # If no results match after all filters
             if recommended_df.empty:
-                return Response({"message": "No courses found matching your criteria"}, status=status.HTTP_404_NOT_FOUND)
+                return Response({
+                    "message": "No courses found matching your criteria",
+                    "recommendations": []
+                }, status=status.HTTP_200_OK)
 
-            # 🔥 Fix: Replace NaN values with default JSON-friendly values
-            recommended_df = recommended_df.replace({np.nan: None})  # Convert NaN to None (JSON null)
-
-            # Format the response as a list of dictionaries
+            # Replace NaN values with None for JSON serialization
+            recommended_df = recommended_df.replace({np.nan: None})
             recommendations = recommended_df.to_dict(orient='records')
 
-            return Response({'recommendations': recommendations}, status=status.HTTP_200_OK)
+            return Response({
+                'message': f"Found {len(recommendations)} courses matching your criteria",
+                'recommendations': recommendations
+            }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+            return Response({
+                "error": str(e),
+                "recommendations": []
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ContentBasedRecommenderView(APIView):
@@ -474,7 +491,7 @@ class CoursePopularityView(APIView):
             popular_courses = Course.objects.annotate(
                 view_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='view')),
                 rating_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='rate')),
-                avg_rating=Avg('courseinteraction__rating', filter=Q(courseinteraction__interaction_type='rate'))
+                avg_rating=Avg('courseinteraction_rating', filter=Q(courseinteraction_interaction_type='rate'))
             ).order_by('-view_count', '-avg_rating')[:10]  # Get top 10 courses
             
             # Format the response
@@ -568,4 +585,4 @@ class CourseDetailView(APIView):
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                )
