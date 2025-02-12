@@ -19,16 +19,160 @@ from django.conf import settings
 from .serializers import CourseSerializer, UserProfileSerializer
 from .utils import cosine_similarity
 import json
+from rest_framework.pagination import PageNumberPagination
+
+# class SearchCourseView(APIView):
+#     def get(self, request):
+#         # Get search parameters from query
+#         name = request.query_params.get('name', '').strip()
+#         description = request.query_params.get('description', '').strip()
+#         difficulty_level = request.query_params.get('difficulty_level', '').strip()
+#         min_rating = request.query_params.get('min_rating')
+
+#         # If no search parameters provided, return empty result
+#         if not any([name, description, difficulty_level, min_rating]):
+#             return Response({
+#                 "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+#                 "recommendations": []
+#             }, status=status.HTTP_200_OK)
+
+#         try:
+#             # Start with the base queryset
+#             queryset = Course.objects.all()
+
+#             # Apply Django ORM filters first
+#             if difficulty_level:
+#                 queryset = queryset.filter(difficulty__iexact=difficulty_level)
+#             if min_rating:
+#                 try:
+#                     min_rating = float(min_rating)
+#                     queryset = queryset.filter(rating__gte=min_rating)
+#                 except ValueError:
+#                     pass
+
+#             # Convert filtered queryset to DataFrame
+#             df = pd.DataFrame.from_records(queryset.values(
+#                 'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description'
+#             ))
+
+#             if df.empty:
+#                 return Response({
+#                     "message": "No courses found matching your criteria",
+#                     "recommendations": []
+#                 }, status=status.HTTP_200_OK)
+
+#             # Clean and process the data
+#             df = clean_and_process_data(df)
+#             recommended_df = df.copy()
+
+#             # Search by name or description using TF-IDF
+#             if name or description:
+#                 search_text = " ".join(filter(None, [name, description]))
+
+#                 # Create search text field for TF-IDF
+#                 df["search_text_field"] = df.apply(
+#                     lambda x: ' '.join([
+#                         str(x['name'] or '') * 3,
+#                         str(x['description'] or ''),
+#                         str(x['university'] or '')
+#                     ]), axis=1
+#                 )
+#                 df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
+
+#                 # TF-IDF Vectorization
+#                 vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
+#                 vectors = vectorizer.fit_transform(df["search_text_field"])
+
+#                 # Get recommended indices
+#                 recommended_indices = books_id_recommended(search_text, vectorizer, vectors, number_of_recommendation=50)
+#                 recommended_df = df.iloc[recommended_indices]
+
+#             # If no results match after all filters
+#             if recommended_df.empty:
+#                 return Response({
+#                     "message": "No courses found matching your criteria",
+#                     "recommendations": []
+#                 }, status=status.HTTP_200_OK)
+
+#             # Replace NaN values with None for JSON serialization
+#             recommended_df = recommended_df.replace({np.nan: None})
+#             recommendations = recommended_df.to_dict(orient='records')
+
+#             return Response({
+#                 'message': f"Found {len(recommendations)} courses matching your criteria",
+#                 'recommendations': recommendations
+#             }, status=status.HTTP_200_OK)
+
+#         except Exception as e:
+#             return Response({
+#                 "error": str(e),
+#                 "recommendations": []
+#             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# class ContentBasedRecommenderView(APIView):
+#     def get(self, request):
+#         user_id = request.query_params.get('user_id')
+#         if not user_id:
+#             return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+#         user_profiles = UserProfile.objects.filter(user_id=user_id)
+#         if not user_profiles.exists():
+#             return Response({"error": f"No profile found for user {user_id}"}, status=status.HTTP_404_NOT_FOUND)
+
+#         # Process user profile
+#         user_df = pd.DataFrame.from_records(user_profiles.values())
+
+#         queryset = Course.objects.all()
+#         df = pd.DataFrame.from_records(queryset.values(
+#             'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description'
+#         ))
+
+#         # Replace NaN values before processing
+#         df['name'] = df['name'].fillna('')
+#         df['university'] = df['university'].fillna('')
+#         df['description'] = df['description'].fillna('')
+#         df['difficulty'] = df['difficulty'].fillna(0)
+#         df['rating'] = df['rating'].fillna(0.0)
+#         df['url'] = df['url'].fillna('')
+
+#         df = clean_and_process_data(df)
+#         df["search_text_field"] = df.apply(
+#             lambda x: ' '.join([str(x['name']) * 3, str(x['description']), str(x['university'])]), axis=1
+#         )
+#         df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
+
+#         # Handle potential None values in user profile
+#         user_interests = ' '.join([
+#             str(user_df['course_name'].iloc[0] or ''),
+#             str(user_df['course_description'].iloc[0] or ''),
+#             str(user_df['skills'].iloc[0] or '')
+#         ])
+
+#         vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
+#         vectors = vectorizer.fit_transform(df["search_text_field"])
+#         recommended_indices = books_id_recommended(user_interests, vectorizer, vectors, number_of_recommendation=10)
+
+#         recommended_df = df.iloc[recommended_indices]
+#         recommendations = json.loads(recommended_df.to_json(orient='records'))
+
+#         return Response({'recommendations': recommendations}, status=status.HTTP_200_OK)
+
+
+class CustomPagination(PageNumberPagination):
+    page_size = 10  # Default page size
+    page_size_query_param = 'page_size'
+    max_page_size = 50
+
 
 class SearchCourseView(APIView):
     def get(self, request):
-        # Get search parameters from query
+        paginator = CustomPagination()  # Initialize paginator
         name = request.query_params.get('name', '').strip()
         description = request.query_params.get('description', '').strip()
         difficulty_level = request.query_params.get('difficulty_level', '').strip()
         min_rating = request.query_params.get('min_rating')
 
-        # If no search parameters provided, return empty result
         if not any([name, description, difficulty_level, min_rating]):
             return Response({
                 "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
@@ -36,10 +180,8 @@ class SearchCourseView(APIView):
             }, status=status.HTTP_200_OK)
 
         try:
-            # Start with the base queryset
             queryset = Course.objects.all()
 
-            # Apply Django ORM filters first
             if difficulty_level:
                 queryset = queryset.filter(difficulty__iexact=difficulty_level)
             if min_rating:
@@ -49,7 +191,6 @@ class SearchCourseView(APIView):
                 except ValueError:
                     pass
 
-            # Convert filtered queryset to DataFrame
             df = pd.DataFrame.from_records(queryset.values(
                 'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description'
             ))
@@ -60,15 +201,12 @@ class SearchCourseView(APIView):
                     "recommendations": []
                 }, status=status.HTTP_200_OK)
 
-            # Clean and process the data
             df = clean_and_process_data(df)
             recommended_df = df.copy()
 
-            # Search by name or description using TF-IDF
             if name or description:
                 search_text = " ".join(filter(None, [name, description]))
 
-                # Create search text field for TF-IDF
                 df["search_text_field"] = df.apply(
                     lambda x: ' '.join([
                         str(x['name'] or '') * 3,
@@ -78,29 +216,26 @@ class SearchCourseView(APIView):
                 )
                 df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
 
-                # TF-IDF Vectorization
                 vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
                 vectors = vectorizer.fit_transform(df["search_text_field"])
 
-                # Get recommended indices
                 recommended_indices = books_id_recommended(search_text, vectorizer, vectors, number_of_recommendation=50)
                 recommended_df = df.iloc[recommended_indices]
 
-            # If no results match after all filters
             if recommended_df.empty:
                 return Response({
                     "message": "No courses found matching your criteria",
                     "recommendations": []
                 }, status=status.HTTP_200_OK)
 
-            # Replace NaN values with None for JSON serialization
             recommended_df = recommended_df.replace({np.nan: None})
             recommendations = recommended_df.to_dict(orient='records')
 
-            return Response({
+            paginated_results = paginator.paginate_queryset(recommendations, request)
+            return paginator.get_paginated_response({
                 'message': f"Found {len(recommendations)} courses matching your criteria",
-                'recommendations': recommendations
-            }, status=status.HTTP_200_OK)
+                'recommendations': paginated_results
+            })
 
         except Exception as e:
             return Response({
@@ -111,6 +246,7 @@ class SearchCourseView(APIView):
 
 class ContentBasedRecommenderView(APIView):
     def get(self, request):
+        paginator = CustomPagination()  # Initialize paginator
         user_id = request.query_params.get('user_id')
         if not user_id:
             return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -119,7 +255,6 @@ class ContentBasedRecommenderView(APIView):
         if not user_profiles.exists():
             return Response({"error": f"No profile found for user {user_id}"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Process user profile
         user_df = pd.DataFrame.from_records(user_profiles.values())
 
         queryset = Course.objects.all()
@@ -127,7 +262,6 @@ class ContentBasedRecommenderView(APIView):
             'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description'
         ))
 
-        # Replace NaN values before processing
         df['name'] = df['name'].fillna('')
         df['university'] = df['university'].fillna('')
         df['description'] = df['description'].fillna('')
@@ -141,7 +275,6 @@ class ContentBasedRecommenderView(APIView):
         )
         df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
 
-        # Handle potential None values in user profile
         user_interests = ' '.join([
             str(user_df['course_name'].iloc[0] or ''),
             str(user_df['course_description'].iloc[0] or ''),
@@ -155,7 +288,11 @@ class ContentBasedRecommenderView(APIView):
         recommended_df = df.iloc[recommended_indices]
         recommendations = json.loads(recommended_df.to_json(orient='records'))
 
-        return Response({'recommendations': recommendations}, status=status.HTTP_200_OK)
+        paginated_results = paginator.paginate_queryset(recommendations, request)
+        return paginator.get_paginated_response({'recommendations': paginated_results})
+
+
+
 
 
 class SignupView(APIView):
