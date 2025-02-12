@@ -175,8 +175,10 @@ class SearchCourseView(APIView):
 
         if not any([name, description, difficulty_level, min_rating]):
             return Response({
-                "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
-                "recommendations": []
+                "results":{
+                    "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+                    "recommendations": []
+                }
             }, status=status.HTTP_200_OK)
 
         try:
@@ -197,8 +199,10 @@ class SearchCourseView(APIView):
 
             if df.empty:
                 return Response({
-                    "message": "No courses found matching your criteria",
+                   "results":{
+                    "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
                     "recommendations": []
+                }
                 }, status=status.HTTP_200_OK)
 
             df = clean_and_process_data(df)
@@ -224,8 +228,10 @@ class SearchCourseView(APIView):
 
             if recommended_df.empty:
                 return Response({
-                    "message": "No courses found matching your criteria",
+                "results":{
+                    "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
                     "recommendations": []
+                }
                 }, status=status.HTTP_200_OK)
 
             recommended_df = recommended_df.replace({np.nan: None})
