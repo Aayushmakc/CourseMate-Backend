@@ -173,7 +173,7 @@ class SearchCourseView(APIView):
         difficulty_level = request.query_params.get('difficulty_level', '').strip()
         min_rating = request.query_params.get('min_rating')
 
-        if not any([name, description, difficulty_level, min_rating]):
+        if not any([name, description, difficulty_level, min_rating,university]):
             return Response({
                 "results":{
                     "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
