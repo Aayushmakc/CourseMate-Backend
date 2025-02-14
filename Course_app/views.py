@@ -614,27 +614,63 @@ class UserInteractionHistoryView(APIView):
             )
 
 
+# class CoursePopularityView(APIView):
+#     """
+#     API endpoint to get popular courses based on user interactions
+#     """
+#     permission_classes = [AllowAny]
+    
+#     def get(self, request):
+#         try:
+#             # Get interaction counts and average ratings for each course
+#             from django.db.models import Count, Avg
+            
+#             popular_courses = Course.objects.annotate(
+#                 view_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='view')),
+#                 rating_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='rate')),
+#                 avg_rating=Avg('courseinteraction_rating', filter=Q(courseinteraction_interaction_type='rate'))
+#             ).order_by('-view_count', '-avg_rating')[:10]  # Get top 10 courses
+            
+#             # Format the response
+#             results = []
+#             for course in popular_courses:
+#                 results.append({
+#                     'course_id': course.course_id,
+#                     'name': course.name,
+#                     'university': course.university,
+#                     'difficulty': course.difficulty,
+#                     'view_count': course.view_count,
+#                     'rating_count': course.rating_count,
+#                     'average_rating': round(course.avg_rating, 2) if course.avg_rating else None
+#                 })
+            
+#             return Response({
+#                 'popular_courses': results
+#             }, status=status.HTTP_200_OK)
+            
+#         except Exception as e:
+#             return Response(
+#                 {"error": str(e)},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#             )
 class CoursePopularityView(APIView):
     """
-    API endpoint to get popular courses based on user interactions
+    API endpoint to get popular courses based on user interactions.
     """
     permission_classes = [AllowAny]
-    
+
     def get(self, request):
         try:
-            # Get interaction counts and average ratings for each course
-            from django.db.models import Count, Avg
-            
+            # Annotate each course with view count, rating count, and average rating
             popular_courses = Course.objects.annotate(
                 view_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='view')),
                 rating_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='rate')),
-                avg_rating=Avg('courseinteraction_rating', filter=Q(courseinteraction_interaction_type='rate'))
+                avg_rating=Avg('courseinteraction__rating', filter=Q(courseinteraction__interaction_type='rate'))  # Fixed reference
             ).order_by('-view_count', '-avg_rating')[:10]  # Get top 10 courses
-            
+
             # Format the response
-            results = []
-            for course in popular_courses:
-                results.append({
+            results = [
+                {
                     'course_id': course.course_id,
                     'name': course.name,
                     'university': course.university,
@@ -642,15 +678,15 @@ class CoursePopularityView(APIView):
                     'view_count': course.view_count,
                     'rating_count': course.rating_count,
                     'average_rating': round(course.avg_rating, 2) if course.avg_rating else None
-                })
-            
-            return Response({
-                'popular_courses': results
-            }, status=status.HTTP_200_OK)
-            
+                }
+                for course in popular_courses
+            ]
+
+            return Response({'popular_courses': results}, status=status.HTTP_200_OK)
+
         except Exception as e:
             return Response(
-                {"error": str(e)},
+                {"error": f"Internal Server Error: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
