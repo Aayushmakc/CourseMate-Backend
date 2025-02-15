@@ -165,24 +165,119 @@ class CustomPagination(PageNumberPagination):
     max_page_size = 50
 
 
+# class SearchCourseView(APIView):
+#     def get(self, request):
+#         paginator = CustomPagination()  # Initialize paginator
+#         name = request.query_params.get('name', '').strip()
+#         description = request.query_params.get('description', '').strip()
+#         difficulty_level = request.query_params.get('difficulty_level', '').strip()
+#         min_rating = request.query_params.get('min_rating')
+
+#         if not any([name, description, difficulty_level, min_rating]):
+#             return Response({
+#                 "results":{
+#                     "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+#                     "recommendations": []
+#                 }
+#             }, status=status.HTTP_200_OK)
+
+#         try:
+#             queryset = Course.objects.all()
+
+#             if difficulty_level:
+#                 queryset = queryset.filter(difficulty__iexact=difficulty_level)
+#             if min_rating:
+#                 try:
+#                     min_rating = float(min_rating)
+#                     queryset = queryset.filter(rating__gte=min_rating)
+#                 except ValueError:
+#                     pass
+
+#             df = pd.DataFrame.from_records(queryset.values(
+#                 'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description'
+#             ))
+
+#             if df.empty:
+#                 return Response({
+#                    "results":{
+#                     "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+#                     "recommendations": []
+#                 }
+#                 }, status=status.HTTP_200_OK)
+
+#             df = clean_and_process_data(df)
+#             recommended_df = df.copy()
+
+#             if name or description:
+#                 search_text = " ".join(filter(None, [name, description]))
+
+#                 df["search_text_field"] = df.apply(
+#                     lambda x: ' '.join([
+#                         str(x['name'] or '') * 3,
+#                         str(x['description'] or ''),
+#                         str(x['university'] or '')
+#                     ]), axis=1
+#                 )
+#                 df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
+
+#                 vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
+#                 vectors = vectorizer.fit_transform(df["search_text_field"])
+
+#                 recommended_indices = books_id_recommended(search_text, vectorizer, vectors, number_of_recommendation=50)
+#                 recommended_df = df.iloc[recommended_indices]
+
+#             if recommended_df.empty:
+#                 return Response({
+#                 "results":{
+#                     "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+#                     "recommendations": []
+#                 }
+#                 }, status=status.HTTP_200_OK)
+
+#             recommended_df = recommended_df.replace({np.nan: None})
+#             recommendations = recommended_df.to_dict(orient='records')
+
+#             paginated_results = paginator.paginate_queryset(recommendations, request)
+#             return paginator.get_paginated_response({
+#                 'message': f"Found {len(recommendations)} courses matching your criteria",
+#                 'recommendations': paginated_results
+#             })
+
+#         except Exception as e:
+#             return Response({
+#                 "error": str(e),
+#                 "recommendations": []
+#             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class SearchCourseView(APIView):
     def get(self, request):
         paginator = CustomPagination()  # Initialize paginator
+        course_id = request.query_params.get('course_id')
         name = request.query_params.get('name', '').strip()
         description = request.query_params.get('description', '').strip()
         difficulty_level = request.query_params.get('difficulty_level', '').strip()
         min_rating = request.query_params.get('min_rating')
 
-        if not any([name, description, difficulty_level, min_rating]):
+        if not any([course_id, name, description, difficulty_level, min_rating]):
             return Response({
                 "results":{
-                    "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+                    "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, or min_rating)",
                     "recommendations": []
                 }
             }, status=status.HTTP_200_OK)
 
         try:
             queryset = Course.objects.all()
+
+            if course_id:
+                try:
+                    course_id = int(course_id)
+                    queryset = queryset.filter(course_id=course_id)
+                except ValueError:
+                    return Response({
+                        "error": "Invalid course_id. Must be a number."
+                    }, status=status.HTTP_400_BAD_REQUEST)
 
             if difficulty_level:
                 queryset = queryset.filter(difficulty__iexact=difficulty_level)
@@ -200,7 +295,7 @@ class SearchCourseView(APIView):
             if df.empty:
                 return Response({
                    "results":{
-                    "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+                    "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, or min_rating)",
                     "recommendations": []
                 }
                 }, status=status.HTTP_200_OK)
@@ -229,7 +324,7 @@ class SearchCourseView(APIView):
             if recommended_df.empty:
                 return Response({
                 "results":{
-                    "message": "Please provide at least one search parameter (name, description, difficulty_level, or min_rating)",
+                    "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, or min_rating)",
                     "recommendations": []
                 }
                 }, status=status.HTTP_200_OK)
@@ -659,6 +754,42 @@ class UserInteractionHistoryView(APIView):
 #                 {"error": str(e)},
 #                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
 #             )
+# class CoursePopularityView(APIView):
+#     """
+#     API endpoint to get popular courses based on user interactions.
+#     """
+#     permission_classes = [AllowAny]
+
+#     def get(self, request):
+#         try:
+#             # Annotate each course with view count, rating count, and average rating
+#             popular_courses = Course.objects.annotate(
+#                 view_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='view')),
+#                 rating_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='rate')),
+#                 avg_rating=Avg('courseinteraction__rating', filter=Q(courseinteraction__interaction_type='rate'))  # Fixed reference
+#             ).order_by('-view_count', '-avg_rating')[:10]  # Get top 10 courses
+
+#             # Format the response
+#             results = [
+#                 {
+#                     'course_id': course.course_id,
+#                     'name': course.name,
+#                     'university': course.university,
+#                     'difficulty': course.difficulty,
+#                     'view_count': course.view_count,
+#                     'rating_count': course.rating_count,
+#                     'average_rating': round(course.avg_rating, 2) if course.avg_rating else None
+#                 }
+#                 for course in popular_courses
+#             ]
+
+#             return Response({'popular_courses': results}, status=status.HTTP_200_OK)
+
+#         except Exception as e:
+#             return Response(
+#                 {"error": f"Internal Server Error: {str(e)}"},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#             )
 class CoursePopularityView(APIView):
     """
     API endpoint to get popular courses based on user interactions.
@@ -667,12 +798,10 @@ class CoursePopularityView(APIView):
 
     def get(self, request):
         try:
-            # Annotate each course with view count, rating count, and average rating
+            # Annotate each course with view count only
             popular_courses = Course.objects.annotate(
                 view_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='view')),
-                rating_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='rate')),
-                avg_rating=Avg('courseinteraction__rating', filter=Q(courseinteraction__interaction_type='rate'))  # Fixed reference
-            ).order_by('-view_count', '-avg_rating')[:10]  # Get top 10 courses
+            ).order_by('-view_count')[:10]  # Get top 10 courses
 
             # Format the response
             results = [
@@ -682,8 +811,8 @@ class CoursePopularityView(APIView):
                     'university': course.university,
                     'difficulty': course.difficulty,
                     'view_count': course.view_count,
-                    'rating_count': course.rating_count,
-                    'average_rating': round(course.avg_rating, 2) if course.avg_rating else None
+                    'description': course.description,
+                    'rating': course.rating
                 }
                 for course in popular_courses
             ]
@@ -695,6 +824,7 @@ class CoursePopularityView(APIView):
                 {"error": f"Internal Server Error: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
 
 
 class CourseDetailView(APIView):
