@@ -25,7 +25,7 @@ class CustomPagination(PageNumberPagination):
     page_size = 10  # Default page size
     page_size_query_param = 'page_size'
     max_page_size = 50
-
+   
 # class SearchCourseView(APIView):
 #     def get(self, request):
 #         paginator = CustomPagination()  # Initialize paginator
@@ -34,11 +34,12 @@ class CustomPagination(PageNumberPagination):
 #         description = request.query_params.get('description', '').strip()
 #         university = request.query_params.get('university', '').strip()
 #         difficulty_level = request.query_params.get('difficulty_level', '').strip()
+#         skills=request.query_params.get('skills','').strip()
 #         min_rating = request.query_params.get('min_rating')
 
-#         if not any([course_id, name, university, description, difficulty_level, min_rating]):
+#         if not any([course_id, name, university, description, difficulty_level,skills, min_rating]):
 #             return Response({
-#                 "results":{
+#                 "results": {
 #                     "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, or min_rating)",
 #                     "recommendations": []
 #                 }
@@ -58,6 +59,9 @@ class CustomPagination(PageNumberPagination):
 
 #             if difficulty_level:
 #                 queryset = queryset.filter(difficulty__iexact=difficulty_level)
+#             if university:
+#                  queryset = queryset.filter(university__iexact=university)  
+
 #             if min_rating:
 #                 try:
 #                     min_rating = float(min_rating)
@@ -66,32 +70,35 @@ class CustomPagination(PageNumberPagination):
 #                     pass
 
 #             df = pd.DataFrame.from_records(queryset.values(
-#                 'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description'
+#                 'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description','skills',
 #             ))
 
 #             if df.empty:
 #                 return Response({
-#                    "results":{
-#                     "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, or min_rating)",
-#                     "recommendations": []
-#                 }
+#                     "results": {
+#                         "message": "No courses found matching your criteria.",
+#                         "recommendations": []
+#                     }
 #                 }, status=status.HTTP_200_OK)
 
+#             # Process Data
 #             df = clean_and_process_data(df)
 #             recommended_df = df.copy()
 
 #             if name or description:
 #                 search_text = " ".join(filter(None, [name, description]))
 
+#                 # Create a temporary search field for better text search
 #                 df["search_text_field"] = df.apply(
 #                     lambda x: ' '.join([
-#                         str(x['name'] or ''),
+#                         str(x['name'] or '') * 3,  # Repeats the name 3 times
 #                         str(x['description'] or ''),
 #                         str(x['university'] or '')
 #                     ]), axis=1
 #                 )
 #                 df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
 
+#                 # Apply TF-IDF for text-based recommendations
 #                 vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
 #                 vectors = vectorizer.fit_transform(df["search_text_field"])
 
@@ -100,11 +107,15 @@ class CustomPagination(PageNumberPagination):
 
 #             if recommended_df.empty:
 #                 return Response({
-#                 "results":{
-#                     "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, or min_rating)",
-#                     "recommendations": []
-#                 }
+#                     "results": {
+#                         "message": "No courses found matching your criteria.",
+#                         "recommendations": []
+#                     }
 #                 }, status=status.HTTP_200_OK)
+
+#             # **EXCLUDE `search_text_field` BEFORE CONVERTING TO DICT**
+#             if "search_text_field" in recommended_df.columns:
+#                 recommended_df = recommended_df.drop(columns=["search_text_field"], errors="ignore")
 
 #             recommended_df = recommended_df.replace({np.nan: None})
 #             recommendations = recommended_df.to_dict(orient='records')
@@ -128,13 +139,13 @@ class SearchCourseView(APIView):
         description = request.query_params.get('description', '').strip()
         university = request.query_params.get('university', '').strip()
         difficulty_level = request.query_params.get('difficulty_level', '').strip()
-        skills=request.query_params.get('skills','').strip()
+        skills = request.query_params.get('skills', '').strip()
         min_rating = request.query_params.get('min_rating')
 
-        if not any([course_id, name, university, description, difficulty_level,skills, min_rating]):
+        if not any([course_id, name, university, description, difficulty_level, skills, min_rating]):
             return Response({
                 "results": {
-                    "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, or min_rating)",
+                    "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, skills, or min_rating)",
                     "recommendations": []
                 }
             }, status=status.HTTP_200_OK)
@@ -154,7 +165,7 @@ class SearchCourseView(APIView):
             if difficulty_level:
                 queryset = queryset.filter(difficulty__iexact=difficulty_level)
             if university:
-                 queryset = queryset.filter(university__iexact=university)  
+                queryset = queryset.filter(university__iexact=university)
 
             if min_rating:
                 try:
@@ -163,8 +174,13 @@ class SearchCourseView(APIView):
                 except ValueError:
                     pass
 
+            if skills:
+                skills_list = [skill.strip() for skill in skills.split(",")]
+                for skill in skills_list:
+                    queryset = queryset.filter(skills__icontains=skill)
+
             df = pd.DataFrame.from_records(queryset.values(
-                'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description','skills',
+                'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description', 'skills',
             ))
 
             if df.empty:
@@ -225,6 +241,11 @@ class SearchCourseView(APIView):
                 "error": str(e),
                 "recommendations": []
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+
 
 class ContentBasedRecommenderView(APIView):
     def get(self, request):
