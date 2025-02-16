@@ -153,6 +153,9 @@ class SearchCourseView(APIView):
 
             if difficulty_level:
                 queryset = queryset.filter(difficulty__iexact=difficulty_level)
+            if university:
+                 queryset = queryset.filter(university__iexact=university)  
+
             if min_rating:
                 try:
                     min_rating = float(min_rating)
