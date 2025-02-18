@@ -66,6 +66,7 @@ class UserProfile(models.Model):
     difficulty_level = models.CharField(max_length=50, default="Medium")
     course_rating = models.FloatField(null=True, blank=True)
     description_keywords = models.TextField(default="No keywords provided")
+    interests = models.TextField(blank=True, null=True)
 
     class Meta:
         unique_together = ['user_id', 'course']  
