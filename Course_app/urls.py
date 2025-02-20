@@ -3,7 +3,7 @@ from .views import (
     SignupView, LoginView, SearchCourseView, 
     ContentBasedRecommenderView, UserProfileView,
     CourseInteractionView, UserInteractionHistoryView, CoursePopularityView,
-    CourseDetailView
+    CourseDetailView, UserInterestsView
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -18,4 +18,5 @@ urlpatterns = [
     path('interaction/history/', UserInteractionHistoryView.as_view(), name='interaction-history'),
     path('popular-courses/', CoursePopularityView.as_view(), name='popular-courses'),
     path('courses/<int:course_id>/', CourseDetailView.as_view(), name='course-detail'),
+    path('interests/', UserInterestsView.as_view(), name='user-interests'),
 ]

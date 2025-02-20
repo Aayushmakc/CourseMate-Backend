@@ -57,24 +57,25 @@ ENGLISH_STOPWORDS = {
 my_lematizer = WordNetLemmatizer()
 
 def clean_and_process_data(df):
-    # Rename columns
-    def rename_col(col_name):
-        return '_'.join(col_name.split(' '))
-
-    df.columns = [rename_col(col) for col in df.columns]
+    """Clean and process DataFrame by removing duplicates and handling course IDs"""
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+    
+    # Rename columns to snake_case if they aren't already
+    def to_snake_case(name):
+        return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+    
+    df.columns = [to_snake_case(col) for col in df.columns]
 
     # Separate course_id before dropping duplicates
-    course_ids = df["course_id"] if "course_id" in df.columns else None
+    course_ids = df["course_id"]
+    df_no_id = df.drop(columns=["course_id"])
 
     # Drop duplicates ignoring course_id
-    df_no_id = df.drop(columns=["course_id"]) if "course_id" in df.columns else df.copy()
     df_no_id = df_no_id.drop_duplicates()
 
     # Reattach course_id (keeping only the first occurrence of each unique row)
-    if course_ids is not None:
-        df_cleaned = pd.concat([course_ids[df_no_id.index], df_no_id], axis=1)
-    else:
-        df_cleaned = df_no_id
+    df_cleaned = df.loc[df_no_id.index]
 
     return df_cleaned
 
@@ -92,6 +93,99 @@ def PreprocessTexte(text):
     cleaned_text = cleaned_text.split()
     cleaned_text = ' '.join([my_lematizer.lemmatize(word) for word in cleaned_text])
     return cleaned_text
+
+def preprocess_courses(df):
+    features_selected_for_merging = ["course_name", "course_description", "skills"]
+    for col in features_selected_for_merging:
+        if col not in df.columns:
+            df[col] = ""  # Fill missing columns with empty strings
+    df["description_key_words"] = df[features_selected_for_merging].apply(lambda x: ' '.join(x.dropna()), axis=1)
+    return df
+
+def recommend_courses_by_interests(user_prefs, df):
+    """
+    Recommend courses based on user interests and preferences
+    Args:
+        user_prefs: dict with 'difficulty' and 'topics'
+        df: DataFrame with course data
+    """
+    vectorizer = CustomTFIDFVectorizer(stop_words='english')
+    course_vectors = vectorizer.fit_transform(df["description_key_words"])
+    
+    # Ensure the user input is handled correctly
+    user_topics_list = user_prefs["topics"].split()
+    user_vectors = [vectorizer.transform([topic]) for topic in user_topics_list]
+    
+    # Compute similarity scores for each topic separately
+    similarities = [cosine_similarity(user_vec, course_vectors).flatten() for user_vec in user_vectors]
+    
+    # Create a dictionary to store courses grouped by topics
+    topic_to_courses = {topic: [] for topic in user_topics_list}
+    
+    for idx, topic in enumerate(user_topics_list):
+        df["similarity"] = similarities[idx]  # Assign similarity for the current topic
+        
+        # Handle both difficulty and difficulty_level column names
+        difficulty_col = 'difficulty_level' if 'difficulty_level' in df.columns else 'difficulty'
+        
+        top_courses = (
+            df[df[difficulty_col].str.lower() == user_prefs["difficulty"].lower()]
+            .sort_values(by="similarity", ascending=False)
+            .head(5)  # Take top 5 per topic
+        )
+        
+        # Select only existing columns
+        columns_to_select = ["course_id"]
+        if "name" in df.columns:
+            columns_to_select.append("name")
+        elif "course_name" in df.columns:
+            columns_to_select.append("course_name")
+            
+        if "url" in df.columns:
+            columns_to_select.append("url")
+        elif "course_url" in df.columns:
+            columns_to_select.append("course_url")
+            
+        if "rating" in df.columns:
+            columns_to_select.append("rating")
+        elif "course_rating" in df.columns:
+            columns_to_select.append("course_rating")
+            
+        if "difficulty" in df.columns:
+            columns_to_select.append("difficulty")
+        elif "difficulty_level" in df.columns:
+            columns_to_select.append("difficulty_level")
+            
+        topic_to_courses[topic] = top_courses[columns_to_select]
+    
+    # Combine results, ensuring equal distribution
+    final_recommendations = []
+    for i in range(5):  # Take up to 5 from each category
+        for topic, courses in topic_to_courses.items():
+            if i < len(courses):
+                final_recommendations.append(courses.iloc[i])
+    
+    # Convert to DataFrame and rename columns to match expected format
+    result_df = pd.DataFrame(final_recommendations)
+    
+    # Define the expected column names
+    column_mapping = {
+        'course_id': 'course_id',
+        'name': 'course_name',
+        'course_name': 'course_name',
+        'url': 'course_url',
+        'course_url': 'course_url',
+        'rating': 'course_rating',
+        'course_rating': 'course_rating',
+        'difficulty': 'difficulty_level',
+        'difficulty_level': 'difficulty_level'
+    }
+    
+    # Only rename columns that exist
+    rename_dict = {col: column_mapping[col] for col in result_df.columns if col in column_mapping}
+    result_df = result_df.rename(columns=rename_dict)
+    
+    return result_df
 
 class CustomTFIDFVectorizer:
     """Custom TF-IDF Vectorizer implementation"""
@@ -188,16 +282,16 @@ def filter_dataframe_function(df, difficulty_level=None, min_rating=None, max_ra
             valid_difficulties = ["beginner", "intermediate", "advanced"]
             if difficulty_level.lower() in valid_difficulties:
                 filtered_df = filtered_df[
-                    filtered_df['difficulty'].str.lower() == difficulty_level.lower()
+                    filtered_df['difficulty_level'].str.lower() == difficulty_level.lower()
                 ]
         
         if min_rating is not None:
             min_rating = float(min_rating)
-            filtered_df = filtered_df[filtered_df['rating'] >= min_rating]
+            filtered_df = filtered_df[filtered_df['course_rating'] >= min_rating]
             
         if max_rating is not None:
             max_rating = float(max_rating)
-            filtered_df = filtered_df[filtered_df['rating'] <= max_rating]
+            filtered_df = filtered_df[filtered_df['course_rating'] <= max_rating]
             
         if filtered_df.empty:
             return pd.DataFrame()
@@ -213,16 +307,24 @@ def books_id_recommended(description, vectorizer, vectors, number_of_recommendat
     description = [PreprocessTexte(description)]
     vect = vectorizer.transform(description)
     similars_vectors = cosine_similarity(vect, vectors)[0]
-    ordered_similars_vectors = list(similars_vectors.argsort())
-    x = list(similars_vectors)
-    x.sort(reverse=True)
-    a = 1
-    for i in x[1:number_of_recommendation+5]:
-        if i >= min_similarity:
-            a = a+1
-    reverse_ordered_similars_vectors = [index for index in reversed(ordered_similars_vectors)]
-    best_indexs = reverse_ordered_similars_vectors[1:min(number_of_recommendation,a)]
-    return best_indexs
+    
+    # Convert to numpy array if not already
+    similars_vectors = np.array(similars_vectors)
+    
+    # Get indices that would sort the array in ascending order
+    ordered_indices = np.argsort(similars_vectors)
+    
+    # Get the actual similarity scores in descending order
+    sorted_scores = similars_vectors[ordered_indices][::-1]
+    
+    # Count how many scores meet the minimum similarity threshold
+    valid_recommendations = np.sum(sorted_scores >= min_similarity)
+    
+    # Get the indices of top N recommendations that meet the threshold
+    n_recommendations = min(number_of_recommendation, max(1, valid_recommendations))
+    best_indices = ordered_indices[::-1][:n_recommendations]
+    
+    return best_indices.tolist()
 
 def find_top_k_indices(df, k):
     """Find top k indices from similarity matrix"""
@@ -279,12 +381,12 @@ def recommend_courses(user_id, main_vectors, df):
     similars_vectors_df = pd.DataFrame(similars_vectors)
 
     # Find indices of matching courses
-    df_course_id_to_index = {course_id: idx for idx, course_id in enumerate(df['Course_ID'])}
+    df_course_id_to_index = {course_id: idx for idx, course_id in enumerate(df['course_id'])}
     user_course_id_to_index = {course_id: idx for idx, course_id in enumerate(user_df['course_id'])}
     
     matching_indices = [
         (df_course_id_to_index[course_id], user_course_id_to_index[course_id])
-        for course_id in df['Course_ID']
+        for course_id in df['course_id']
         if course_id in user_course_id_to_index
     ]
 

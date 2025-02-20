@@ -3,21 +3,26 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import authenticate, login
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
-from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import SignupSerializer, LoginSerializer
-from .utils import send_welcome_email
-from .utils import filter_dataframe_function
-from .utils import recommend_courses
+from django.db.models import Count, Avg, Q
 from rest_framework.permissions import AllowAny
-from django.http import JsonResponse
-from .models import Course, UserProfile, CourseInteraction
 import pandas as pd
 import numpy as np
-from .utils import PreprocessTexte, CustomTFIDFVectorizer, clean_and_process_data, books_id_recommended
-from django.db.models import Count, Avg, Q
+from .models import Course, UserProfile, CourseInteraction, UserInterests
+from .serializers import SignupSerializer, LoginSerializer, CourseSerializer, UserProfileSerializer
+from .utils import (
+    clean_and_process_data,
+    preprocess_courses,
+    recommend_courses_by_interests,
+    send_welcome_email,
+    PreprocessTexte,
+    CustomTFIDFVectorizer,
+    books_id_recommended,
+    cosine_similarity,
+    filter_dataframe_function
+)
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.http import JsonResponse
 from django.conf import settings
-from .serializers import CourseSerializer, UserProfileSerializer
-from .utils import cosine_similarity
 import json
 from rest_framework.pagination import PageNumberPagination
 
@@ -141,8 +146,25 @@ class SearchCourseView(APIView):
         difficulty_level = request.query_params.get('difficulty_level', '').strip()
         skills = request.query_params.get('skills', '').strip()
         min_rating = request.query_params.get('min_rating')
+        user_id = request.query_params.get('user_id')
 
-        if not any([course_id, name, university, description, difficulty_level, skills, min_rating]):
+        # If user_id is provided, get user interests and use them for search
+        if user_id:
+            try:
+                user_interests = UserInterests.objects.get(user_id=user_id)
+                if not any([course_id, name, university, description, difficulty_level, skills, min_rating]):
+                    # Use user interests for search
+                    difficulty_level = user_interests.difficulty_level
+                    if user_interests.interests:
+                        skills = user_interests.interests
+            except UserInterests.DoesNotExist:
+                return Response({
+                    "results": {
+                        "message": "User interests not found. Please provide search parameters.",
+                        "recommendations": []
+                    }
+                }, status=status.HTTP_404_NOT_FOUND)
+        elif not any([course_id, name, university, description, difficulty_level, skills, min_rating]):
             return Response({
                 "results": {
                     "message": "Please provide at least one search parameter (course_id, name, description, difficulty_level, skills, or min_rating)",
@@ -201,10 +223,12 @@ class SearchCourseView(APIView):
                 # Create a temporary search field for better text search
                 df["search_text_field"] = df.apply(
                     lambda x: ' '.join([
-                        str(x['name'] or '') * 3,  # Repeats the name 3 times
-                        str(x['description'] or ''),
-                        str(x['university'] or '')
-                    ]), axis=1
+                        str(x['name']) * 3,
+                        str(x['description']),
+                        str(x['university']),
+                        str(x['skills'])
+                    ]), 
+                    axis=1
                 )
                 df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
 
@@ -248,107 +272,221 @@ class SearchCourseView(APIView):
 
 
 class ContentBasedRecommenderView(APIView):
+    permission_classes = [AllowAny]
+
     def get(self, request):
-        paginator = CustomPagination()  # Initialize paginator
-        user_id = request.query_params.get('user_id')
-        if not user_id:
-            return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            paginator = CustomPagination()
+            user_id = request.query_params.get('user_id')
+            if not user_id:
+                return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get user's interaction history
-        user_interactions = CourseInteraction.objects.filter(user_id=user_id)
-        if not user_interactions.exists():
-            return Response({"message": "No interaction history found for user."}, 
-                          status=status.HTTP_200_OK)
+            # Get all courses for recommendations
+            queryset = Course.objects.all()
+            all_courses_df = pd.DataFrame.from_records(queryset.values(
+                'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description', 'skills'
+            ))
 
-        # Get viewed and rated courses
-        viewed_courses = user_interactions.filter(interaction_type='view').values_list('course', flat=True)
-        rated_courses = user_interactions.filter(
-            interaction_type='rate',
-            rating__isnull=False
-        ).order_by('-rating', '-timestamp')
+            if all_courses_df.empty:
+                return Response({
+                    'message': 'No courses available',
+                    'recommendations': []
+                }, status=status.HTTP_200_OK)
 
-        # Get all courses
-        queryset = Course.objects.all()
-        all_courses_df = pd.DataFrame.from_records(queryset.values(
-            'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description', 'skills'
-        ))
-
-        # Clean the dataframe
-        all_courses_df = all_courses_df.fillna({
-            'name': '',
-            'university': '',
-            'description': '',
-            'difficulty': '',
-            'rating': 0.0,
-            'url': '',
-            'skills': ''
-        })
-
-        # If user has rated courses, use them as the basis for recommendations
-        if rated_courses.exists():
-            # Get the user's highest rated courses
-            top_rated_courses = rated_courses.values('course__name', 'course__description', 'course__skills')[:3]
+            # Clean the dataframe
+            all_courses_df = all_courses_df.fillna({
+                'name': '',
+                'university': '',
+                'description': '',
+                'difficulty': 'Beginner',  # Default to Beginner for missing difficulty
+                'rating': 0.0,
+                'url': '',
+                'skills': ''
+            })
             
-            # Create a search text from the user's top rated courses
-            user_interests = ' '.join([
-                ' '.join([str(course['course__name'] or '') * 3,  # Give more weight to course names
-                         str(course['course__description'] or ''),
-                         str(course['course__skills'] or '')])
-                for course in top_rated_courses
-            ])
-        else:
-            # If no ratings, use viewed courses
-            viewed_course_data = queryset.filter(course_id__in=viewed_courses).values(
-                'name', 'description', 'skills'
-            )[:3]
+            # Rename difficulty to difficulty_level for consistency
+            all_courses_df = all_courses_df.rename(columns={'difficulty': 'difficulty_level'})
+
+            # Get user's interaction history
+            user_interactions = CourseInteraction.objects.filter(user_id=user_id)
+            print(f"Found {user_interactions.count()} interactions for user {user_id}")
+
+            recommendations = []
+            viewed_courses = []
+
+            # If user has interactions, prioritize interaction-based recommendations
+            if user_interactions.exists():
+                # Get viewed and rated courses
+                viewed_courses = list(user_interactions.filter(interaction_type='view').values_list('course', flat=True))
+                rated_courses = user_interactions.filter(
+                    interaction_type='rate',
+                    rating__isnull=False
+                ).order_by('-rating', '-timestamp')
+
+                print(f"Found {len(viewed_courses)} viewed courses and {rated_courses.count()} rated courses")
+
+                # Process the data for interaction-based recommendations
+                all_courses_df = clean_and_process_data(all_courses_df)
+                all_courses_df["search_text_field"] = all_courses_df.apply(
+                    lambda x: ' '.join([
+                        str(x['name']) * 3,
+                        str(x['description']),
+                        str(x['university']),
+                        str(x['skills'])
+                    ]), 
+                    axis=1
+                )
+                all_courses_df["search_text_field"] = all_courses_df["search_text_field"].apply(PreprocessTexte)
+
+                if rated_courses.exists():
+                    # Get the user's highest rated courses
+                    top_rated_courses = rated_courses.values('course__name', 'course__description', 'course__skills')[:3]
+                    print(f"Using top {len(top_rated_courses)} rated courses for recommendations")
+                    user_interests = ' '.join([
+                        ' '.join([str(course['course__name'] or '') * 3,
+                                str(course['course__description'] or ''),
+                                str(course['course__skills'] or '')])
+                        for course in top_rated_courses
+                    ])
+                else:
+                    # If no ratings, use viewed courses
+                    viewed_course_data = Course.objects.filter(course_id__in=viewed_courses).values(
+                        'name', 'description', 'skills'
+                    )[:3]
+                    print(f"Using top {len(viewed_course_data)} viewed courses for recommendations")
+                    
+                    if viewed_course_data:
+                        user_interests = ' '.join([
+                            ' '.join([str(course['name'] or '') * 3,
+                                    str(course['description'] or ''),
+                                    str(course['skills'] or '')])
+                            for course in viewed_course_data
+                        ])
+                    else:
+                        print("No valid viewed courses found, falling back to interests")
+                        return self.get_interest_based_recommendations(user_id, all_courses_df)
+
+                # Get interaction-based recommendations
+                vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
+                vectors = vectorizer.fit_transform(all_courses_df["search_text_field"])
+                recommended_indices = books_id_recommended(user_interests, vectorizer, vectors, number_of_recommendation=20)
+
+                recommended_df = all_courses_df.iloc[recommended_indices]
+                recommended_df = recommended_df[~recommended_df['course_id'].isin(viewed_courses)]
+                recommended_df = recommended_df.sort_values('rating', ascending=False)
+                recommended_df = recommended_df.drop(columns=["search_text_field"])
+
+                # Convert DataFrame to list of dictionaries
+                recommendations = []
+                for _, row in recommended_df.iterrows():
+                    recommendations.append({
+                        'course_id': int(row['course_id']),
+                        'name': row['name'],
+                        'university': row.get('university', ''),
+                        'difficulty': row.get('difficulty_level', 'Beginner'),  # Use difficulty_level instead of difficulty
+                        'rating': float(row['rating']) if pd.notnull(row['rating']) else None,
+                        'url': row['url'],
+                        'description': row.get('description', ''),
+                        'skills': row.get('skills', '')
+                    })
+                message = 'Recommendations based on your course interactions'
+                print(f"Generated {len(recommendations)} interaction-based recommendations")
+
+            else:
+                print(f"No interactions found, trying interest-based recommendations")
+                return self.get_interest_based_recommendations(request, user_id, all_courses_df)
+
+            # Apply pagination to final recommendations
+            paginated_results = paginator.paginate_queryset(recommendations, request)
+            return paginator.get_paginated_response({
+                'message': message,
+                'recommendations': paginated_results
+            })
+
+        except Exception as e:
+            print(f"Error in ContentBasedRecommenderView: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def get_interest_based_recommendations(self, request, user_id, all_courses_df):
+        try:
+            user_interests = UserInterests.objects.get(user_id=user_id)
+            selected_categories = user_interests.interests.split(',')
+            difficulty_level = user_interests.difficulty_level
+
+            # Create user preferences dict
+            selected_topics = [
+                topic 
+                for category in selected_categories 
+                for topic in UserInterestsView.topic_categories[category]
+            ]
+            user_prefs = {
+                "difficulty": difficulty_level.lower(),
+                "topics": ' '.join(set(selected_topics))
+            }
+
+            # Rename columns to match expected format
+            column_mapping = {
+                'course_id': 'course_id',
+                'name': 'course_name',
+                'difficulty': 'difficulty_level',
+                'rating': 'course_rating',
+                'url': 'course_url',
+                'description': 'course_description',
+                'skills': 'skills'
+            }
+            df = all_courses_df.rename(columns=column_mapping)
+
+            # Clean and preprocess data
+            df = clean_and_process_data(df)
+            df = preprocess_courses(df)
+
+            # Get recommendations based on interests
+            recommended_courses = recommend_courses_by_interests(user_prefs, df)
+
+            if not recommended_courses.empty:
+                recommendations = []
+                for _, course in recommended_courses.iterrows():
+                    try:
+                        recommendations.append({
+                            'course_id': int(course['course_id']),
+                            'name': course['course_name'],
+                            'university': '',
+                            'difficulty': course['difficulty_level'],
+                            'rating': float(course['course_rating']) if pd.notnull(course['course_rating']) else None,
+                            'url': course['course_url'],
+                            'description': course.get('course_description', ''),
+                            'skills': course.get('skills', '')
+                        })
+                    except Exception as e:
+                        print(f"Error processing course: {str(e)}")
+                        continue
+                message = 'Recommendations based on your interests'
+                print(f"Generated {len(recommendations)} interest-based recommendations")
+            else:
+                message = 'No recommendations found based on your interests'
+                recommendations = []
+                print("No recommendations found based on interests")
+
+            # Apply pagination to recommendations
+            paginator = CustomPagination()
+            paginated_results = paginator.paginate_queryset(recommendations, request)
             
-            user_interests = ' '.join([
-                ' '.join([str(course['name'] or '') * 3,
-                         str(course['description'] or ''),
-                         str(course['skills'] or '')])
-                for course in viewed_course_data
-            ])
+            return paginator.get_paginated_response({
+                'message': message,
+                'recommendations': paginated_results
+            })
 
-        # Process the data
-        all_courses_df = clean_and_process_data(all_courses_df)
-        
-        # Create search text field for similarity comparison
-        all_courses_df["search_text_field"] = all_courses_df.apply(
-            lambda x: ' '.join([
-                str(x['name']) * 3,
-                str(x['description']),
-                str(x['university']),
-                str(x['skills'])
-            ]), 
-            axis=1
-        )
-        all_courses_df["search_text_field"] = all_courses_df["search_text_field"].apply(PreprocessTexte)
-
-        # Get recommendations
-        vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
-        vectors = vectorizer.fit_transform(all_courses_df["search_text_field"])
-        recommended_indices = books_id_recommended(user_interests, vectorizer, vectors, number_of_recommendation=20)
-
-        # Filter out courses the user has already interacted with
-        recommended_df = all_courses_df.iloc[recommended_indices]
-        recommended_df = recommended_df[~recommended_df['course_id'].isin(viewed_courses)]
-        
-        # Sort recommendations by rating
-        recommended_df = recommended_df.sort_values('rating', ascending=False)
-        
-        # Drop the search text field and convert to records
-        recommended_df = recommended_df.drop(columns=["search_text_field"])
-        recommendations = json.loads(recommended_df.to_json(orient='records'))
-
-        paginated_results = paginator.paginate_queryset(recommendations, request)
-        return paginator.get_paginated_response({
-            'message': 'Recommendations based on your course interactions',
-            'recommendations': paginated_results
-        })
-
-
-
-
+        except UserInterests.DoesNotExist:
+            print("No user interests found")
+            return Response({
+                'message': 'No interaction history or interests found for user.',
+                'recommendations': []
+            }, status=status.HTTP_200_OK)
 class SignupView(APIView):
     """
     API endpoint for user registration.
@@ -539,106 +677,6 @@ class UserProfileView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-
-class CourseInteractionView(APIView):
-    """
-    API endpoint for tracking user interactions with courses.
-    This automatically creates/updates user profiles based on their interactions.
-    """
-    permission_classes = [AllowAny]
-    
-    def post(self, request):
-        try:
-            user_id = request.data.get('user_id')
-            course_id = request.data.get('course_id')
-            interaction_type = request.data.get('interaction_type')  # 'view', 'rate'
-            rating = request.data.get('rating')  # only for 'rate' interaction
-            
-            if not all([user_id, course_id, interaction_type]):
-                return Response(
-                    {"error": "user_id, course_id, and interaction_type are required"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Get the course
-            try:
-                course = Course.objects.get(course_id=course_id)
-            except Course.DoesNotExist:
-                return Response(
-                    {"error": f"Course with id {course_id} not found"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            # Create or get user profile
-            # Use authenticated user's ID if available, otherwise use provided user_id
-            current_user_id = request.user.id if request.user.is_authenticated else user_id
-            profile = UserProfile.objects.filter(
-                user_id=current_user_id,
-                course=course
-            ).first()
-            
-            if not profile:
-                # Create new profile
-                profile = UserProfile.objects.create(
-                    user_id=current_user_id,
-                    course=course,
-                    course_name=course.name,
-                    course_description=course.description,
-                    skills=course.skills,
-                    difficulty_level=course.difficulty,
-                    course_rating=rating if rating is not None else course.rating
-                )
-            elif interaction_type == 'rate' and rating is not None:
-                # Update rating for existing profile
-                profile.course_rating = rating
-                profile.save()
-            
-            # Record the interaction
-            interaction = CourseInteraction.objects.create(
-                user_id=current_user_id,
-                course=course,
-                interaction_type=interaction_type,
-                rating=rating if interaction_type == 'rate' else None
-            )
-            
-            # Update course rating when a new rating is added
-            if interaction_type == 'rate' and rating is not None:
-                # Calculate new average rating
-                avg_rating = CourseInteraction.objects.filter(
-                    course=course,
-                    interaction_type='rate',
-                    rating__isnull=False
-                ).aggregate(Avg('rating'))['rating__avg']
-                
-                # Update course rating
-                course.rating = avg_rating
-                course.save()
-            
-            return Response({
-                'message': 'Interaction recorded successfully',
-                'profile': {
-                    'id': profile.id,
-                    'user_id': profile.user_id,
-                    'course_name': profile.course_name,
-                    'skills': profile.skills,
-                    'difficulty_level': profile.difficulty_level,
-                    'course_rating': profile.course_rating
-                },
-                'interaction': {
-                    'id': interaction.id,
-                    'type': interaction.interaction_type,
-                    'timestamp': interaction.timestamp
-                }
-            }, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            print(f"Error recording interaction: {str(e)}")
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
 class UserProfileView(APIView):
     def post(self, request):
         """Create a new user profile"""
@@ -789,12 +827,11 @@ class CoursePopularityView(APIView):
     def get(self, request):
         try:
             # Get interaction counts and average ratings for each course
-            from django.db.models import Count, Avg
             
             popular_courses = Course.objects.annotate(
                 view_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='view')),
                 rating_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='rate')),
-                avg_rating=Avg('courseinteraction_rating', filter=Q(courseinteraction_interaction_type='rate'))
+                avg_rating=Avg('courseinteraction__rating', filter=Q(courseinteraction__interaction_type='rate'))
             ).order_by('-view_count', '-avg_rating')[:10]  # Get top 10 courses
             
             # Format the response
@@ -960,3 +997,294 @@ class CourseDetailView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
+
+class UserInterestsView(APIView):
+    """
+    API endpoint for handling user interests
+    """
+    permission_classes = [AllowAny]
+
+    # Define categories
+    topic_categories = {
+        "Technology": ["Docker", "Machine Learning", "Artificial Intelligence", "Cybersecurity", "Cloud Computing", 
+                      "Data Science", "Blockchain", "Programming", "Software Development"],
+        "Business": ["Finance", "Marketing", "Entrepreneurship", "Management", "Business Strategy", "Leadership", 
+                    "Accounting", "Project Management"],
+        "Science": ["Physics", "Chemistry", "Biology", "Astronomy", "Environmental Science", "Mathematics", "Geology"],
+        "Health & Medicine": ["Orthodontics", "Animal Health", "Medical Science", "Healthcare", "Mental Health", "Nutrition"],
+        "Arts & Humanities": ["Screenwriting", "Graphic Design", "Music", "History", "Philosophy", "Archaeology"],
+        "Social Sciences": ["Psychology", "Sociology", "Political Science", "Economics", "Education"]
+    }
+
+    def post(self, request):
+        try:
+            print(f"Received request data: {request.data}")  # Debug print
+            user_id = request.data.get('user_id')
+            selected_categories = request.data.get('categories', [])
+            difficulty_level = request.data.get('difficulty_level', 'Beginner')
+            print(f"Extracted values - user_id: {user_id}, categories: {selected_categories}, difficulty: {difficulty_level}")  # Debug print
+
+            if not user_id or not selected_categories:
+                return Response({
+                    'error': 'Both user_id and categories are required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Validate categories
+            if not all(category in self.topic_categories.keys() for category in selected_categories):
+                return Response({
+                    'error': 'Invalid categories provided'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Store user interests
+            interests_str = ','.join(selected_categories)
+            print(f"Attempting to save interests_str: {interests_str}")  # Debug print
+            try:
+                obj, created = UserInterests.objects.update_or_create(
+                    user_id=user_id,
+                    defaults={
+                        'interests': interests_str,
+                        'difficulty_level': difficulty_level
+                    }
+                )
+                print(f"Save result - created: {created}, object: {obj}")  # Debug print
+            except Exception as save_error:
+                print(f"Error saving interests: {str(save_error)}")
+                raise save_error
+
+            return Response({
+                'message': 'Interests saved successfully',
+                'user_id': user_id,
+                'interests': selected_categories,
+                'difficulty_level': difficulty_level
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Error in UserInterestsView: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class UserRecommendationsView(APIView):
+    """
+    API endpoint to fetch user recommendations with pagination
+    """
+    permission_classes = [AllowAny]
+    pagination_class = CustomPagination
+
+    def get(self, request):
+        try:
+            user_id = request.query_params.get('user_id')
+            page = int(request.query_params.get('page', 1))
+            page_size = int(request.query_params.get('page_size', 10))
+
+            if not user_id:
+                return Response({
+                    'error': 'user_id is required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get user interests
+            try:
+                user_interests = UserInterests.objects.get(user_id=user_id)
+            except UserInterests.DoesNotExist:
+                return Response({
+                    'error': 'User interests not found'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Get user preferences
+            selected_categories = user_interests.interests.split(',')
+            difficulty_level = user_interests.difficulty_level
+
+            # Create user preferences dict
+            selected_topics = [
+                topic 
+                for category in selected_categories 
+                for topic in UserInterestsView.topic_categories[category]
+            ]
+            user_prefs = {
+                "difficulty": difficulty_level.lower(),
+                "topics": ' '.join(set(selected_topics))
+            }
+
+            # Get all courses
+            queryset = Course.objects.all()
+            df = pd.DataFrame.from_records(queryset.values(
+                'course_id', 'name', 'university', 'difficulty', 'rating', 
+                'url', 'description', 'skills'
+            ))
+
+            if df.empty:
+                return Response({
+                    'message': 'No courses available',
+                    'results': [],
+                    'total_pages': 0,
+                    'current_page': page
+                }, status=status.HTTP_200_OK)
+
+            # Rename columns to match expected format
+            column_mapping = {
+                'course_id': 'course_id',
+                'name': 'course_name',
+                'difficulty': 'difficulty_level',
+                'rating': 'course_rating',
+                'url': 'course_url',
+                'description': 'course_description',
+                'skills': 'skills'
+            }
+            df = df.rename(columns=column_mapping)
+
+            # Clean and preprocess data
+            df = clean_and_process_data(df)
+            df = preprocess_courses(df)
+
+            # Get recommendations
+            recommended_courses = recommend_courses_by_interests(user_prefs, df)
+
+            if recommended_courses.empty:
+                return Response({
+                    'message': 'No recommendations found',
+                    'results': [],
+                    'total_pages': 0,
+                    'current_page': page
+                }, status=status.HTTP_200_OK)
+
+            # Convert recommendations to list and create user profiles
+            all_recommendations = []
+            for _, course in recommended_courses.iterrows():
+                try:
+                    course_id = int(course['course_id'])
+                    course_obj = Course.objects.get(course_id=course_id)
+                    
+                    # Create user profile for recommended course
+                    UserProfile.objects.get_or_create(
+                        user_id=user_id,
+                        course=course_obj,
+                        defaults={
+                            'course_name': course['course_name'],
+                            'course_description': course.get('course_description', ''),
+                            'skills': course.get('skills', ''),
+                            'difficulty_level': course['difficulty_level'],
+                            'course_rating': float(course['course_rating']) if pd.notnull(course['course_rating']) else None
+                        }
+                    )
+                    
+                    all_recommendations.append({
+                        'course_id': course_id,
+                        'course_name': course['course_name'],
+                        'course_url': course['course_url'],
+                        'course_rating': float(course['course_rating']) if pd.notnull(course['course_rating']) else None,
+                        'difficulty_level': course['difficulty_level']
+                    })
+                except Exception as e:
+                    print(f"Error processing course: {str(e)}")
+                    continue
+
+            # Apply pagination
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            paginated_recommendations = all_recommendations[start_idx:end_idx]
+            total_pages = (len(all_recommendations) + page_size - 1) // page_size
+
+            return Response({
+                'message': 'Recommendations fetched successfully',
+                'results': paginated_recommendations,
+                'total_pages': total_pages,
+                'current_page': page
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Error in UserRecommendationsView: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+class CourseInteractionView(APIView):
+    """
+    API endpoint for tracking user interactions with courses.
+    Records user interactions with courses for personalized recommendations.
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        try:
+            user_id = request.data.get('user_id')
+            course_id = request.data.get('course_id')
+            interaction_type = request.data.get('interaction_type')  # 'view', 'rate'
+            rating = request.data.get('rating')  # only for 'rate' interaction
+            
+            if not all([user_id, course_id, interaction_type]):
+                return Response(
+                    {"error": "user_id, course_id, and interaction_type are required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get the course
+            try:
+                course = Course.objects.get(course_id=course_id)
+            except Course.DoesNotExist:
+                return Response(
+                    {"error": f"Course with id {course_id} not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Validate interaction type
+            if interaction_type not in ['view', 'rate']:
+                return Response(
+                    {"error": "interaction_type must be either 'view' or 'rate'"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # For rate interactions, validate rating
+            if interaction_type == 'rate' and (rating is None or not (0 <= float(rating) <= 5)):
+                return Response(
+                    {"error": "rating is required for rate interactions and must be between 0 and 5"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Record the interaction
+            try:
+                interaction = CourseInteraction.objects.create(
+                    user_id=user_id,
+                    course=course,
+                    interaction_type=interaction_type,
+                    rating=rating if interaction_type == 'rate' else None
+                )
+                
+                # Update the course's average rating if this is a rate interaction
+                if interaction_type == 'rate':
+                    from django.db.models import Avg
+                    avg_rating = CourseInteraction.objects.filter(
+                        course=course,
+                        interaction_type='rate',
+                        rating__isnull=False
+                    ).aggregate(Avg('rating'))['rating__avg']
+                    
+                    if avg_rating is not None:
+                        course.rating = avg_rating
+                        course.save()
+                return Response({
+                    "message": "Interaction recorded successfully",
+                    "interaction": {
+                        "user_id": user_id,
+                        "course_id": course_id,
+                        "interaction_type": interaction_type,
+                        "rating": rating if interaction_type == 'rate' else None
+                    }
+                }, status=status.HTTP_201_CREATED)
+
+            except Exception as e:
+                print(f"Error recording interaction: {str(e)}")
+                return Response(
+                    {"error": "Failed to record interaction"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        except Exception as e:
+            print(f"Error in CourseInteractionView: {str(e)}")
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

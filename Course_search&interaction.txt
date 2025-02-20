@@ -80,3 +80,13 @@ Also the interation can be used for the popular courses too.
 
 GET:
 http://127.0.0.1:8000/courses/188/?user_id=89
+
+
+11. Interests:
+POST:
+http://127.0.0.1:8000/interests/
+{
+    "user_id": "56",  #Fresh user
+    "categories": ["Technology", "Business"],
+    "difficulty_level": "Beginner"
+}
