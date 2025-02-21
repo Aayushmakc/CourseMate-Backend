@@ -155,6 +155,17 @@ def recommend_courses_by_interests(user_prefs, df):
             columns_to_select.append("difficulty")
         elif "difficulty_level" in df.columns:
             columns_to_select.append("difficulty_level")
+
+        if "university" in df.columns:
+            columns_to_select.append("university")
+
+        if "description" in df.columns:
+            columns_to_select.append("description")
+        elif "course_description" in df.columns:
+            columns_to_select.append("course_description")
+
+        if "skills" in df.columns:
+            columns_to_select.append("skills")
             
         topic_to_courses[topic] = top_courses[columns_to_select]
     
@@ -178,7 +189,11 @@ def recommend_courses_by_interests(user_prefs, df):
         'rating': 'course_rating',
         'course_rating': 'course_rating',
         'difficulty': 'difficulty_level',
-        'difficulty_level': 'difficulty_level'
+        'difficulty_level': 'difficulty_level',
+        'university': 'university',
+        'description': 'course_description',
+        'course_description': 'course_description',
+        'skills': 'skills'
     }
     
     # Only rename columns that exist
