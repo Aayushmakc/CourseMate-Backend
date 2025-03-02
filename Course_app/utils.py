@@ -50,8 +50,16 @@ from nltk.stem import WordNetLemmatizer
 
 # Predefined stopwords list
 ENGLISH_STOPWORDS = {
-    "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours",
-    # ... (same as your original stopwords)
+    "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves",
+    "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they", "them", "their",
+    "theirs", "themselves", "what", "which", "who", "whom", "this", "that", "these", "those", "am", "is", "are",
+    "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an",
+    "the", "and", "but", "if", "or", "because", "as", "until", "while", "of", "at", "by", "for", "with", "about",
+    "against", "between", "into", "through", "during", "before", "after", "above", "below", "to", "from", "up",
+    "down", "in", "out", "on", "off", "over", "under", "again", "further", "then", "once", "here", "there", "when",
+    "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no",
+    "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don",
+    "should", "now"
 }
 
 my_lematizer = WordNetLemmatizer()
@@ -317,7 +325,31 @@ def filter_dataframe_function(df, difficulty_level=None, min_rating=None, max_ra
             
     return filtered_df
 
-def books_id_recommended(description, vectorizer, vectors, number_of_recommendation=5):
+# def books_id_recommended(description, vectorizer, vectors, number_of_recommendation=5):
+#     min_similarity = 0.075
+#     description = [PreprocessTexte(description)]
+#     vect = vectorizer.transform(description)
+#     similars_vectors = cosine_similarity(vect, vectors)[0]
+    
+#     # Convert to numpy array if not already
+#     similars_vectors = np.array(similars_vectors)
+    
+#     # Get indices that would sort the array in ascending order
+#     ordered_indices = np.argsort(similars_vectors)
+    
+#     # Get the actual similarity scores in descending order
+#     sorted_scores = similars_vectors[ordered_indices][::-1]
+    
+#     # Count how many scores meet the minimum similarity threshold
+#     valid_recommendations = np.sum(sorted_scores >= min_similarity)
+    
+#     # Get the indices of top N recommendations that meet the threshold
+#     n_recommendations = min(number_of_recommendation, max(1, valid_recommendations))
+#     best_indices = ordered_indices[::-1][:n_recommendations]
+    
+#     return best_indices.tolist()
+
+def books_id_recommended(description, vectorizer, vectors, number_of_recommendation=5, return_scores=False):
     min_similarity = 0.075
     description = [PreprocessTexte(description)]
     vect = vectorizer.transform(description)
@@ -339,6 +371,8 @@ def books_id_recommended(description, vectorizer, vectors, number_of_recommendat
     n_recommendations = min(number_of_recommendation, max(1, valid_recommendations))
     best_indices = ordered_indices[::-1][:n_recommendations]
     
+    if return_scores:
+        return best_indices.tolist(), sorted_scores[:n_recommendations].tolist()
     return best_indices.tolist()
 
 def find_top_k_indices(df, k):

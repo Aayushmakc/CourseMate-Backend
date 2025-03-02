@@ -51,6 +51,7 @@ class Course(models.Model):
     url = models.URLField()
     description = models.TextField()
     skills = models.TextField()
+    
 
     def __str__(self):
         return self.name
@@ -83,9 +84,6 @@ class UserInterests(models.Model):
 
     def __str__(self):
         return f"{self.user_id}'s interests"
-
-
-
 
 
 
