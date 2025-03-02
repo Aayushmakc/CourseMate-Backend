@@ -530,17 +530,14 @@ class ContentBasedRecommenderView(APIView):
             if not user_id:
                 return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Get all courses for recommendations
+            # Get all courses
             queryset = Course.objects.all()
             all_courses_df = pd.DataFrame.from_records(queryset.values(
                 'course_id', 'name', 'university', 'difficulty', 'rating', 'url', 'description', 'skills'
             ))
 
             if all_courses_df.empty:
-                return Response({
-                    'message': 'No courses available',
-                    'recommendations': []
-                }, status=status.HTTP_200_OK)
+                return Response({'message': 'No courses available', 'recommendations': []}, status=status.HTTP_200_OK)
 
             # Fill missing values
             all_courses_df = all_courses_df.fillna({
@@ -556,66 +553,72 @@ class ContentBasedRecommenderView(APIView):
             # Rename difficulty column for consistency
             all_courses_df = all_courses_df.rename(columns={'difficulty': 'difficulty_level'})
 
-            # Get user's interaction history
-            user_interactions = CourseInteraction.objects.filter(user_id=user_id)
-            print(f"Found {user_interactions.count()} interactions for user {user_id}")
-
-            recommendations = []
-            viewed_courses = []
-
-            # ✅ Only consider courses where the user rated 4 or higher
-            rated_courses = user_interactions.filter(
-                interaction_type='rate',
-                rating__gte=4  # ⭐ Only consider ratings of 4 or higher
-            ).order_by('-rating', '-timestamp')
-
-            print(f"Found {rated_courses.count()} highly rated courses")
-
-            # If user has highly rated courses, use them for recommendations
-            if rated_courses.exists():
-                # Extract top-rated course data
-                top_rated_courses = rated_courses.values('course__name', 'course__description', 'course__skills')[:3]
-                print(f"Using top {len(top_rated_courses)} highly rated courses for recommendations")
-
-                user_interests = ' '.join([
-                    ' '.join([str(course['course__name'] or '') * 3,
-                              str(course['course__description'] or ''),
-                              str(course['course__skills'] or '')])
-                    for course in top_rated_courses
-                ])
-
-                # Prepare data for similarity comparison
-                all_courses_df = clean_and_process_data(all_courses_df)
-                all_courses_df["search_text_field"] = all_courses_df.apply(
-                    lambda x: ' '.join([
-                        str(x['name']) * 3,
-                        str(x['description']),
-                        str(x['university']),
-                        str(x['skills'])
-                    ]), 
-                    axis=1
-                )
-                all_courses_df["search_text_field"] = all_courses_df["search_text_field"].apply(PreprocessTexte)
-
-                # Apply TF-IDF to find similar courses
-                vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
-                vectors = vectorizer.fit_transform(all_courses_df["search_text_field"])
-                recommended_indices = books_id_recommended(user_interests, vectorizer, vectors, number_of_recommendation=20)
-
-                # Select recommended courses
-                recommended_df = all_courses_df.iloc[recommended_indices]
-                recommended_df = recommended_df.drop(columns=["search_text_field"], errors="ignore")
-
-                # Convert to response format
-                recommendations = recommended_df.to_dict(orient='records')
-                message = 'Recommendations based on your highly rated courses'
-                print(f"Generated {len(recommendations)} recommendations")
-
-            else:
-                print("No highly rated courses found. Falling back to interest-based recommendations.")
+            # Get user's rated courses
+            user_interactions = CourseInteraction.objects.filter(user_id=user_id, interaction_type='rate')
+            if not user_interactions.exists():
+                print(f"No ratings found for user {user_id}. Falling back to interest-based recommendations.")
                 return self.get_interest_based_recommendations(request, user_id, all_courses_df)
 
-            # Paginate and return results
+            rated_courses = list(user_interactions.values('course_id', 'rating'))
+            rated_courses_df = pd.DataFrame(rated_courses)
+
+            print(f"User {user_id} rated {len(rated_courses_df)} courses.")
+
+            # Define rating weight function
+            def rating_weight(rating):
+                return rating / 5.0  # Normalize ratings (5 → 1.0, 3 → 0.6, 2 → 0.4, etc.)
+
+            rated_courses_df['weight'] = rated_courses_df['rating'].apply(rating_weight)
+
+            # Merge rated courses with full dataset
+            rated_courses_merged = pd.merge(rated_courses_df, all_courses_df, left_on='course_id', right_on='course_id')
+
+            # Create weighted user interest text
+            user_interests = ' '.join([
+                (' '.join([
+                    (str(row['name']) + ' ') * 3,
+                    str(row['description']),
+                    str(row['university']),
+                    str(row['skills'])
+                ])) * row['weight']  # Scale text repetition by weight
+                for _, row in rated_courses_merged.iterrows()
+            ])
+
+            # Prepare full dataset for similarity
+            all_courses_df["search_text_field"] = all_courses_df.apply(
+                lambda x: ' '.join([
+                    (str(x['name']) + ' ') * 3,
+                    str(x['description']),
+                    str(x['university']),
+                    str(x['skills'])
+                ]), 
+                axis=1
+            )
+
+            all_courses_df["search_text_field"] = all_courses_df["search_text_field"].apply(PreprocessTexte)
+
+            # Apply TF-IDF and compute similarity
+            vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
+            vectors = vectorizer.fit_transform(all_courses_df["search_text_field"])
+
+            recommended_indices = books_id_recommended(user_interests, vectorizer, vectors, number_of_recommendation=20)
+
+            recommended_df = all_courses_df.iloc[recommended_indices]
+
+            # Remove courses the user already took
+            already_taken_courses = set(rated_courses_df['course_id'])
+            recommended_df = recommended_df[~recommended_df['course_id'].isin(already_taken_courses)]
+
+            # Sort by rating and limit results
+            recommended_df = recommended_df.sort_values('rating', ascending=False).head(10)
+
+            # Convert DataFrame to response format
+            recommendations = recommended_df.to_dict(orient='records')
+            message = 'Recommendations based on your highly rated courses'
+
+            print(f"Generated {len(recommendations)} recommendations for user {user_id}")
+
+            # Paginate results
             paginated_results = paginator.paginate_queryset(recommendations, request)
             return paginator.get_paginated_response({
                 'message': message,
@@ -626,10 +629,7 @@ class ContentBasedRecommenderView(APIView):
             print(f"Error in ContentBasedRecommenderView: {str(e)}")
             import traceback
             traceback.print_exc()
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def get_interest_based_recommendations(self, request, user_id, all_courses_df):
         try:
@@ -637,7 +637,6 @@ class ContentBasedRecommenderView(APIView):
             selected_categories = user_interests.interests.split(',')
             difficulty_level = user_interests.difficulty_level
 
-            # Create user preference data
             selected_topics = [
                 topic 
                 for category in selected_categories 
@@ -648,7 +647,6 @@ class ContentBasedRecommenderView(APIView):
                 "topics": ' '.join(set(selected_topics))
             }
 
-            # Rename columns for consistency
             column_mapping = {
                 'course_id': 'course_id',
                 'name': 'course_name',
@@ -661,11 +659,9 @@ class ContentBasedRecommenderView(APIView):
             }
             df = all_courses_df.rename(columns=column_mapping)
 
-            # Preprocess data
             df = clean_and_process_data(df)
             df = preprocess_courses(df)
 
-            # Get recommendations based on interests
             recommended_courses = recommend_courses_by_interests(user_prefs, df)
 
             if not recommended_courses.empty:
@@ -677,10 +673,9 @@ class ContentBasedRecommenderView(APIView):
                 recommendations = []
                 print("No recommendations found based on interests")
 
-            # Paginate and return results
             paginator = CustomPagination()
             paginated_results = paginator.paginate_queryset(recommendations, request)
-            
+
             return paginator.get_paginated_response({
                 'message': message,
                 'recommendations': paginated_results
@@ -692,8 +687,6 @@ class ContentBasedRecommenderView(APIView):
                 'message': 'No interaction history or interests found for user.',
                 'recommendations': []
             }, status=status.HTTP_200_OK)
-
-
 
 
 class SignupView(APIView):
