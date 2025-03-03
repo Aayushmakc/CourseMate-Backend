@@ -526,5 +526,5 @@ def recommend_courses(user_interests, df):
     except Exception as e:
         print(f"Error in recommend_courses: {str(e)}")
         import traceback
-        traceback.print_exc()  # Print full traceback
+        traceback.print_exc()  
         return pd.DataFrame()
