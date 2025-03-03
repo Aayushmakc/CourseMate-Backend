@@ -350,30 +350,48 @@ def filter_dataframe_function(df, difficulty_level=None, min_rating=None, max_ra
 #     return best_indices.tolist()
 
 def books_id_recommended(description, vectorizer, vectors, number_of_recommendation=5, return_scores=False):
-    min_similarity = 0.075
-    description = [PreprocessTexte(description)]
-    vect = vectorizer.transform(description)
-    similars_vectors = cosine_similarity(vect, vectors)[0]
-    
-    # Convert to numpy array if not already
-    similars_vectors = np.array(similars_vectors)
-    
-    # Get indices that would sort the array in ascending order
-    ordered_indices = np.argsort(similars_vectors)
-    
-    # Get the actual similarity scores in descending order
-    sorted_scores = similars_vectors[ordered_indices][::-1]
-    
-    # Count how many scores meet the minimum similarity threshold
-    valid_recommendations = np.sum(sorted_scores >= min_similarity)
-    
-    # Get the indices of top N recommendations that meet the threshold
-    n_recommendations = min(number_of_recommendation, max(1, valid_recommendations))
-    best_indices = ordered_indices[::-1][:n_recommendations]
-    
-    if return_scores:
-        return best_indices.tolist(), sorted_scores[:n_recommendations].tolist()
-    return best_indices.tolist()
+    try:
+        print("DEBUG: Starting books_id_recommended")  # Debugging
+        min_similarity = 0.075  # Lowered from 0.1 to get more recommendations
+        
+        description = [PreprocessTexte(description)]
+        vect = vectorizer.transform(description)
+        
+        similars_vectors = cosine_similarity(vect, vectors)[0]
+        print(f"DEBUG: Similarity scores range: {similars_vectors.min():.3f} to {similars_vectors.max():.3f}")  # Debugging
+        
+        # Convert to numpy array if not already
+        similars_vectors = np.array(similars_vectors)
+        
+        # Get indices that would sort the array in ascending order
+        ordered_indices = np.argsort(similars_vectors)
+        
+        # Get the actual similarity scores in descending order
+        sorted_scores = similars_vectors[ordered_indices][::-1]
+        
+        # Count how many scores meet the minimum similarity threshold
+        valid_recommendations = np.sum(sorted_scores >= min_similarity)
+        print(f"DEBUG: Found {valid_recommendations} recommendations above threshold {min_similarity}")  # Debugging
+        
+        if valid_recommendations == 0:
+            print("DEBUG: No recommendations meet similarity threshold, using top 5")  # Debugging
+            n_recommendations = min(5, len(sorted_scores))
+        else:
+            # Get the indices of top N recommendations that meet the threshold
+            n_recommendations = min(number_of_recommendation, max(1, valid_recommendations))
+        
+        best_indices = ordered_indices[::-1][:n_recommendations]
+        print(f"DEBUG: Returning {len(best_indices)} indices")  # Debugging
+        
+        if return_scores:
+            return best_indices.tolist(), sorted_scores[:n_recommendations].tolist()
+        return best_indices.tolist()
+        
+    except Exception as e:
+        print(f"Error in books_id_recommended: {str(e)}")
+        import traceback
+        traceback.print_exc()  # Print full traceback
+        return ([], []) if return_scores else []
 
 def find_top_k_indices(df, k):
     """Find top k indices from similarity matrix"""
@@ -446,3 +464,67 @@ def recommend_courses(user_id, main_vectors, df):
     top_10_rows = [row for row, col in top_10_indices[:10]]
 
     return top_10_rows
+
+def recommend_courses(user_interests, df):
+    """
+    Recommend courses based on user interests using TF-IDF and cosine similarity
+    Args:
+        user_interests: string containing user interests and preferences
+        df: DataFrame with course data
+    Returns:
+        DataFrame with recommended courses
+    """
+    try:
+        print("DEBUG: Starting recommend_courses")  # Debugging
+        print(f"DEBUG: Input DataFrame shape: {df.shape}")  # Debugging
+        
+        # Preprocess user interests
+        user_interests = PreprocessTexte(user_interests)
+        print(f"DEBUG: Preprocessed user interests: {user_interests[:100]}...")  # Debugging
+        
+        # Create TF-IDF vectors
+        vectorizer = CustomTFIDFVectorizer(stop_words='english')
+        
+        # Ensure description_key_words exists
+        if 'description_key_words' not in df.columns:
+            print("DEBUG: Creating description_key_words column")  # Debugging
+            df = preprocess_courses(df)
+        
+        print(f"DEBUG: Number of non-empty description_key_words: {df['description_key_words'].str.strip().str.len().gt(0).sum()}")  # Debugging
+        
+        course_vectors = vectorizer.fit_transform(df["description_key_words"])
+        print(f"DEBUG: Created course vectors with shape: {course_vectors.shape}")  # Debugging
+        
+        # Get recommended course indices
+        recommended_indices, similarity_scores = books_id_recommended(
+            user_interests, 
+            vectorizer, 
+            course_vectors,
+            number_of_recommendation=20,
+            return_scores=True
+        )
+        
+        print(f"DEBUG: Got {len(recommended_indices)} recommended indices with scores: {similarity_scores[:5]}")  # Debugging
+        
+        if not recommended_indices:
+            print("DEBUG: No recommended indices returned")  # Debugging
+            return pd.DataFrame()
+            
+        # Get recommended courses
+        recommendations = df.iloc[recommended_indices].copy()
+        recommendations['similarity_score'] = similarity_scores
+        
+        # Sort by similarity score
+        recommendations = recommendations.sort_values('similarity_score', ascending=False)
+        print(f"DEBUG: Final recommendations shape: {recommendations.shape}")  # Debugging
+        
+        # Drop the similarity score and description_key_words columns
+        recommendations = recommendations.drop(['similarity_score', 'description_key_words'], axis=1, errors='ignore')
+        
+        return recommendations
+        
+    except Exception as e:
+        print(f"Error in recommend_courses: {str(e)}")
+        import traceback
+        traceback.print_exc()  # Print full traceback
+        return pd.DataFrame()
