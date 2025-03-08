@@ -26,12 +26,12 @@ from django.http import JsonResponse
 from django.conf import settings
 import json
 from rest_framework.pagination import PageNumberPagination
-import logging
 
-logger = logging.getLogger(__name__)
+
+
 
 class CustomPagination(PageNumberPagination):
-    page_size = 10  # Default page size
+    page_size = 10  
     page_size_query_param = 'page_size'
     max_page_size = 50
     page_query_param = 'page'
@@ -39,7 +39,7 @@ class CustomPagination(PageNumberPagination):
 
 class SearchCourseView(APIView):
     def get(self, request):
-        paginator = CustomPagination()  # Initialize paginator
+        paginator = CustomPagination()  
         course_id = request.query_params.get('course_id')
         name = request.query_params.get('name', '').strip()
         description = request.query_params.get('description', '').strip()
@@ -49,12 +49,11 @@ class SearchCourseView(APIView):
         min_rating = request.query_params.get('min_rating')
         user_id = request.query_params.get('user_id')
 
-        # If user_id is provided, get user interests and use them for search
+        
         if user_id:
             try:
                 user_interests = UserInterests.objects.get(user_id=user_id)
                 if not any([course_id, name, university, description, difficulty_level, skills, min_rating]):
-                    # Use user interests for search
                     difficulty_level = user_interests.difficulty_level
                     if user_interests.interests:
                         skills = user_interests.interests
@@ -114,14 +113,14 @@ class SearchCourseView(APIView):
                     }
                 }, status=status.HTTP_200_OK)
 
-            # Process Data
+            
             df = clean_and_process_data(df)
             recommended_df = df.copy()
 
             if name or description:
                 search_text = " ".join(filter(None, [name, description]))
 
-                # Create a temporary search field for better text search
+               
                 df["search_text_field"] = df.apply(
                     lambda x: ' '.join([
                         str(x['name']) * 3,
@@ -133,20 +132,20 @@ class SearchCourseView(APIView):
                 )
                 df["search_text_field"] = df["search_text_field"].apply(PreprocessTexte)
 
-                # Apply TF-IDF for text-based recommendations
+               
                 vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
                 vectors = vectorizer.fit_transform(df["search_text_field"])
 
-                # Get recommended indices and their similarity scores
+                
                 recommended_indices, similarity_scores = books_id_recommended(search_text, vectorizer, vectors, number_of_recommendation=50, return_scores=True)
                 
-                # Filter out results with low similarity (threshold = 0.1)
+                
                 valid_indices = [idx for idx, score in zip(recommended_indices, similarity_scores) if score > 0.1]
                 
                 if valid_indices:
                     recommended_df = df.iloc[valid_indices]
                 else:
-                    recommended_df = pd.DataFrame()  # Empty DataFrame if no valid matches
+                    recommended_df = pd.DataFrame()  
 
             if recommended_df.empty:
                 return Response({
@@ -156,7 +155,6 @@ class SearchCourseView(APIView):
                     }
                 }, status=status.HTTP_200_OK)
 
-            # **EXCLUDE `search_text_field` BEFORE CONVERTING TO DICT**
             if "search_text_field" in recommended_df.columns:
                 recommended_df = recommended_df.drop(columns=["search_text_field"], errors="ignore")
 
@@ -199,7 +197,7 @@ class ContentBasedRecommenderView(APIView):
                     'recommendations': []
                 }, status=status.HTTP_200_OK)
 
-            # Fill missing values
+          
             all_courses_df = all_courses_df.fillna({
                 'name': '',
                 'university': '',
@@ -210,33 +208,32 @@ class ContentBasedRecommenderView(APIView):
                 'skills': ''
             })
 
-            # Fetch user interactions
+            
             user_interactions = CourseInteraction.objects.filter(user_id=user_id)
             viewed_courses = set(user_interactions.values_list('course_id', flat=True))
             
-            print(f"DEBUG: User {user_id} interactions:", list(user_interactions.values()))  # Debugging
+            print(f"DEBUG: User {user_id} interactions:", list(user_interactions.values()))  
 
-            # Get highly rated courses, ordered by timestamp (most recent first)
+           
             rated_courses = user_interactions.filter(
                 interaction_type='rate',
                 rating__gte=4  
             ).order_by('-timestamp')
 
-            print(f"DEBUG: Found {rated_courses.count()} highly rated courses")  # Debugging
+            print(f"DEBUG: Found {rated_courses.count()} highly rated courses")  
 
             if rated_courses.exists():
-                # Get course details for top rated courses, ensuring we get a mix of recent ratings
-                top_rated_courses = rated_courses.select_related('course')[:5]  # Increased from 3 to 5 for more variety
                 
-                print("DEBUG: Top rated courses:")  # Debugging
+                top_rated_courses = rated_courses.select_related('course')[:5]  
+                
+                print("DEBUG: Top rated courses:") 
                 for course in top_rated_courses:
                     print(f"- {course.course.name} (Rating: {course.rating}, Skills: {course.course.skills})")
 
-                # Build user interests with higher weight for recent ratings
+            
                 user_interests_parts = []
                 for idx, interaction in enumerate(top_rated_courses):
-                    # Give more weight to recent ratings by repeating them more times
-                    weight = 5 - idx  # 5 for most recent, 4 for second most recent, etc.
+                    weight = 5 - idx  
                     course = interaction.course
                     if course.name:
                         user_interests_parts.extend([course.name] * weight)
@@ -247,59 +244,56 @@ class ContentBasedRecommenderView(APIView):
                         user_interests_parts.append(course.description)
 
                 user_interests = ' '.join(user_interests_parts)
-                print("DEBUG: User Interests:", user_interests)  # Debugging line
+                print("DEBUG: User Interests:", user_interests)  
 
                 all_courses_df = clean_and_process_data(all_courses_df)
                 all_courses_df = preprocess_courses(all_courses_df)
 
                 recommended_courses = recommend_courses(user_interests, all_courses_df)
-                print(f"DEBUG: Got {len(recommended_courses) if isinstance(recommended_courses, pd.DataFrame) else 0} recommended courses")  # Debugging
+                print(f"DEBUG: Got {len(recommended_courses) if isinstance(recommended_courses, pd.DataFrame) else 0} recommended courses")  
 
                 if isinstance(recommended_courses, pd.DataFrame) and not recommended_courses.empty:
                     filtered_recommendations = recommended_courses[~recommended_courses['course_id'].isin(viewed_courses)]
-                    print(f"DEBUG: After filtering viewed courses: {len(filtered_recommendations)} courses")  # Debugging
+                    print(f"DEBUG: After filtering viewed courses: {len(filtered_recommendations)} courses") 
                     
                     if not filtered_recommendations.empty:
-                        # Get the categories of the user's recent highly rated courses
                         recent_categories = set()
                         for interaction in top_rated_courses:
                             if interaction.course.skills:
                                 categories = [cat.strip().lower() for cat in interaction.course.skills.split(',')]
                                 recent_categories.update(categories)
                         
-                        print(f"DEBUG: Recent categories: {recent_categories}")  # Debugging
+                        print(f"DEBUG: Recent categories: {recent_categories}")  
 
-                        # Ensure recommendations include courses from different categories
                         recommendations = []
                         seen_categories = set()
                         for _, course in filtered_recommendations.iterrows():
                             course_dict = course.to_dict()
                             course_categories = set([cat.strip().lower() for cat in str(course_dict.get('skills', '')).split(',')])
                             
-                            # Add course if it shares any category with recent interests and isn't too similar to already recommended courses
                             if not course_categories.isdisjoint(recent_categories):
                                 recommendations.append(course_dict)
                                 seen_categories.update(course_categories)
                             
-                            if len(recommendations) >= 20:  # Limit to 20 recommendations
+                            if len(recommendations) >= 20:  
                                 break
                         
-                        print(f"DEBUG: Final recommendations count: {len(recommendations)}")  # Debugging
+                        print(f"DEBUG: Final recommendations count: {len(recommendations)}")  
                         
                         if not recommendations:
-                            print("DEBUG: No diverse recommendations found, falling back to filtered recommendations")  # Debugging
+                            print("DEBUG: No diverse recommendations found, falling back to filtered recommendations")  
                             recommendations = filtered_recommendations.head(20).to_dict(orient='records')
                         
                         message = 'Recommendations based on your recent interests'
                     else:
-                        print("DEBUG: All recommended courses were already viewed")  # Debugging
+                        print("DEBUG: All recommended courses were already viewed") 
                         return self.get_popular_recommendations(request, user_id, all_courses_df)
                 else:
-                    print("DEBUG: No recommendations from recommend_courses")  # Debugging
+                    print("DEBUG: No recommendations from recommend_courses")  
                     return self.get_interest_based_recommendations(request, user_id, all_courses_df)
 
             else:
-                print("DEBUG: No highly rated courses found")  # Debugging
+                print("DEBUG: No highly rated courses found")  
                 return self.get_interest_based_recommendations(request, user_id, all_courses_df)
 
             paginated_results = paginator.paginate_queryset(recommendations, request)
@@ -336,10 +330,10 @@ class ContentBasedRecommenderView(APIView):
                     recommendations = recommended_courses.to_dict(orient='records')
                     message = "Recommendations based on your interests"
                 else:
-                    # Fall back to popular courses if no recommendations found
+                    
                     return self.get_popular_recommendations(request, user_id, all_courses_df)
             else:
-                # No interests found, return popular recommendations
+                
                 return self.get_popular_recommendations(request, user_id, all_courses_df)
 
             paginated_results = paginator.paginate_queryset(recommendations, request)
@@ -349,10 +343,9 @@ class ContentBasedRecommenderView(APIView):
             })
 
         except UserInterests.DoesNotExist:
-            # If no user interests found, return popular recommendations
             return self.get_popular_recommendations(request, user_id, all_courses_df)
         except Exception as e:
-            print(f"Error in get_interest_based_recommendations: {str(e)}")  # Debugging
+            print(f"Error in get_interest_based_recommendations: {str(e)}")  
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -364,7 +357,6 @@ class ContentBasedRecommenderView(APIView):
         """
         try:
             paginator = CustomPagination()
-            # Get courses with high ratings and interaction counts
             popular_courses = CourseInteraction.objects.values('course_id').annotate(
                 avg_rating=Avg('rating'),
                 interaction_count=Count('id')
@@ -374,7 +366,6 @@ class ContentBasedRecommenderView(APIView):
             ).order_by('-avg_rating', '-interaction_count')[:10]
 
             if not popular_courses:
-                # If no popular courses found, return top rated courses from the dataset
                 recommendations = all_courses_df.sort_values(
                     by=['rating'], 
                     ascending=False
@@ -391,7 +382,7 @@ class ContentBasedRecommenderView(APIView):
                 "recommendations": paginated_results
             })
         except Exception as e:
-            print(f"Error in get_popular_recommendations: {str(e)}")  # Debugging
+            print(f"Error in get_popular_recommendations: {str(e)}")  
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -412,7 +403,7 @@ class SignupView(APIView):
             login(request, user)  
             refresh = RefreshToken.for_user(user)
             
-            # Send welcome email
+            
             try:
                 send_welcome_email(user.email, user.first_name)
             except Exception as e:
@@ -480,7 +471,7 @@ class UserProfileView(APIView):
     def post(self, request):
         """Create a new user profile"""
         try:
-            # Get data from request
+           
             user_id = request.data.get('user_id')
             course_id = request.data.get('course_id')
             
@@ -490,7 +481,7 @@ class UserProfileView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Get the course
+        
             try:
                 course = Course.objects.get(course_id=course_id)
             except Course.DoesNotExist:
@@ -499,7 +490,7 @@ class UserProfileView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Check if profile already exists
+           
             existing_profile = UserProfile.objects.filter(user_id=user_id, course=course).first()
             if existing_profile:
                 return Response(
@@ -507,7 +498,7 @@ class UserProfileView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Create user profile
+            
             profile_data = {
                 'user_id': user_id,
                 'course': course,
@@ -602,10 +593,10 @@ class UserInteractionHistoryView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Get user's interactions
+           
             interactions = CourseInteraction.objects.filter(user_id=user_id).select_related('course')
             
-            # Format the response
+            
             history = []
             for interaction in interactions:
                 history.append({
@@ -636,12 +627,11 @@ class CoursePopularityView(APIView):
 
     def get(self, request):
         try:
-            # Annotate each course with view count only
             popular_courses = Course.objects.annotate(
                 view_count=Count('courseinteraction', filter=Q(courseinteraction__interaction_type='view')),
-            ).order_by('-view_count')[:10]  # Get top 10 courses
+            ).order_by('-view_count')[:10]  
 
-            # Format the response
+            
             results = [
                 {
                     'course_id': course.course_id,
@@ -662,6 +652,107 @@ class CoursePopularityView(APIView):
                 {"error": f"Internal Server Error: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class UserInterestsView(APIView):
+    """
+    API endpoint for handling user interests
+    """
+    permission_classes = [AllowAny]
+
+  
+    topic_categories = {
+        "Technology": ["Docker", "Machine Learning", "Artificial Intelligence", "Cybersecurity", "Cloud Computing", 
+                      "Data Science", "Blockchain", "Programming", "Software Development"],
+        "Business": ["Finance", "Marketing", "Entrepreneurship", "Management", "Business Strategy", "Leadership", 
+                    "Accounting", "Project Management"],
+        "Science": ["Physics", "Chemistry", "Biology", "Astronomy", "Environmental Science", "Mathematics", "Geology"],
+        "Health & Medicine": ["Orthodontics", "Animal Health", "Medical Science", "Healthcare", "Mental Health", "Nutrition"],
+        "Arts & Humanities": ["Screenwriting", "Graphic Design", "Music", "History", "Philosophy", "Archaeology"],
+        "Social Sciences": ["Psychology", "Sociology", "Political Science", "Economics", "Education"]
+    }
+
+    def post(self, request):
+        try:
+            print(f"Received request data: {request.data}")  
+            user_id = request.data.get('user_id')
+            selected_categories = request.data.get('categories', [])
+            difficulty_level = request.data.get('difficulty_level', 'Beginner')
+            print(f"Extracted values - user_id: {user_id}, categories: {selected_categories}, difficulty: {difficulty_level}")  # Debug print
+
+            if not user_id or not selected_categories:
+                return Response({
+                    'error': 'Both user_id and categories are required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            
+            if not all(category in self.topic_categories.keys() for category in selected_categories):
+                return Response({
+                    'error': 'Invalid categories provided'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            
+            interests_str = ','.join(selected_categories)
+            print(f"Attempting to save interests_str: {interests_str}") 
+            try:
+                obj, created = UserInterests.objects.update_or_create(
+                    user_id=user_id,
+                    defaults={
+                        'interests': interests_str,
+                        'difficulty_level': difficulty_level
+                    }
+                )
+                print(f"Save result - created: {created}, object: {obj}") 
+            except Exception as save_error:
+                print(f"Error saving interests: {str(save_error)}")
+                raise save_error
+
+            return Response({
+                'message': 'Interests saved successfully',
+                'user_id': user_id,
+                'interests': selected_categories,
+                'difficulty_level': difficulty_level
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Error in UserInterestsView: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -733,75 +824,6 @@ class CourseDetailView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
-
-class UserInterestsView(APIView):
-    """
-    API endpoint for handling user interests
-    """
-    permission_classes = [AllowAny]
-
-    # Define categories
-    topic_categories = {
-        "Technology": ["Docker", "Machine Learning", "Artificial Intelligence", "Cybersecurity", "Cloud Computing", 
-                      "Data Science", "Blockchain", "Programming", "Software Development"],
-        "Business": ["Finance", "Marketing", "Entrepreneurship", "Management", "Business Strategy", "Leadership", 
-                    "Accounting", "Project Management"],
-        "Science": ["Physics", "Chemistry", "Biology", "Astronomy", "Environmental Science", "Mathematics", "Geology"],
-        "Health & Medicine": ["Orthodontics", "Animal Health", "Medical Science", "Healthcare", "Mental Health", "Nutrition"],
-        "Arts & Humanities": ["Screenwriting", "Graphic Design", "Music", "History", "Philosophy", "Archaeology"],
-        "Social Sciences": ["Psychology", "Sociology", "Political Science", "Economics", "Education"]
-    }
-
-    def post(self, request):
-        try:
-            print(f"Received request data: {request.data}")  # Debug print
-            user_id = request.data.get('user_id')
-            selected_categories = request.data.get('categories', [])
-            difficulty_level = request.data.get('difficulty_level', 'Beginner')
-            print(f"Extracted values - user_id: {user_id}, categories: {selected_categories}, difficulty: {difficulty_level}")  # Debug print
-
-            if not user_id or not selected_categories:
-                return Response({
-                    'error': 'Both user_id and categories are required'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            # Validate categories
-            if not all(category in self.topic_categories.keys() for category in selected_categories):
-                return Response({
-                    'error': 'Invalid categories provided'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            # Store user interests
-            interests_str = ','.join(selected_categories)
-            print(f"Attempting to save interests_str: {interests_str}")  # Debug print
-            try:
-                obj, created = UserInterests.objects.update_or_create(
-                    user_id=user_id,
-                    defaults={
-                        'interests': interests_str,
-                        'difficulty_level': difficulty_level
-                    }
-                )
-                print(f"Save result - created: {created}, object: {obj}")  # Debug print
-            except Exception as save_error:
-                print(f"Error saving interests: {str(save_error)}")
-                raise save_error
-
-            return Response({
-                'message': 'Interests saved successfully',
-                'user_id': user_id,
-                'interests': selected_categories,
-                'difficulty_level': difficulty_level
-            }, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            print(f"Error in UserInterestsView: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
 
 class CourseInteractionView(APIView):
     """

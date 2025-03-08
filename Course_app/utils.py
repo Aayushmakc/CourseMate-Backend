@@ -9,8 +9,6 @@ import scipy.sparse as sp
 import math
 
 
-# This is for emailsetup
-
 def send_welcome_email(user_email, first_name):
     subject = 'Welcome to CourseMate!'
     message = f"""
@@ -33,22 +31,12 @@ def send_welcome_email(user_email, first_name):
             recipient_list=[user_email],
             fail_silently=False,
         ) 
-        print("Email sent successfully!")  # Debug print
+        print("Email sent successfully!")  
         return True
     except Exception as e:
         print(f"Failed to send email: {str(e)}")
         return False
     
-# utils.py
-import pandas as pd
-import numpy as np
-import scipy.sparse as sp
-from collections import Counter
-import math
-import re
-from nltk.stem import WordNetLemmatizer
-
-# Predefined stopwords list
 ENGLISH_STOPWORDS = {
     "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves",
     "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they", "them", "their",
@@ -66,23 +54,16 @@ my_lematizer = WordNetLemmatizer()
 
 def clean_and_process_data(df):
     """Clean and process DataFrame by removing duplicates and handling course IDs"""
-    # Make a copy to avoid modifying the original
     df = df.copy()
-    
-    # Rename columns to snake_case if they aren't already
     def to_snake_case(name):
         return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
     
     df.columns = [to_snake_case(col) for col in df.columns]
 
-    # Separate course_id before dropping duplicates
     course_ids = df["course_id"]
     df_no_id = df.drop(columns=["course_id"])
 
-    # Drop duplicates ignoring course_id
     df_no_id = df_no_id.drop_duplicates()
-
-    # Reattach course_id (keeping only the first occurrence of each unique row)
     df_cleaned = df.loc[df_no_id.index]
 
     return df_cleaned
@@ -106,7 +87,7 @@ def preprocess_courses(df):
     features_selected_for_merging = ["course_name", "course_description", "skills"]
     for col in features_selected_for_merging:
         if col not in df.columns:
-            df[col] = ""  # Fill missing columns with empty strings
+            df[col] = "" 
     df["description_key_words"] = df[features_selected_for_merging].apply(lambda x: ' '.join(x.dropna()), axis=1)
     return df
 
@@ -119,30 +100,22 @@ def recommend_courses_by_interests(user_prefs, df):
     """
     vectorizer = CustomTFIDFVectorizer(stop_words='english')
     course_vectors = vectorizer.fit_transform(df["description_key_words"])
-    
-    # Ensure the user input is handled correctly
+
     user_topics_list = user_prefs["topics"].split()
     user_vectors = [vectorizer.transform([topic]) for topic in user_topics_list]
-    
-    # Compute similarity scores for each topic separately
     similarities = [cosine_similarity(user_vec, course_vectors).flatten() for user_vec in user_vectors]
-    
-    # Create a dictionary to store courses grouped by topics
     topic_to_courses = {topic: [] for topic in user_topics_list}
     
     for idx, topic in enumerate(user_topics_list):
-        df["similarity"] = similarities[idx]  # Assign similarity for the current topic
-        
-        # Handle both difficulty and difficulty_level column names
+        df["similarity"] = similarities[idx] 
         difficulty_col = 'difficulty_level' if 'difficulty_level' in df.columns else 'difficulty'
         
         top_courses = (
             df[df[difficulty_col].str.lower() == user_prefs["difficulty"].lower()]
             .sort_values(by="similarity", ascending=False)
-            .head(5)  # Take top 5 per topic
+            .head(5) 
         )
         
-        # Select only existing columns
         columns_to_select = ["course_id"]
         if "name" in df.columns:
             columns_to_select.append("name")
@@ -177,17 +150,13 @@ def recommend_courses_by_interests(user_prefs, df):
             
         topic_to_courses[topic] = top_courses[columns_to_select]
     
-    # Combine results, ensuring equal distribution
     final_recommendations = []
-    for i in range(5):  # Take up to 5 from each category
+    for i in range(5):  
         for topic, courses in topic_to_courses.items():
             if i < len(courses):
                 final_recommendations.append(courses.iloc[i])
-    
-    # Convert to DataFrame and rename columns to match expected format
     result_df = pd.DataFrame(final_recommendations)
     
-    # Define the expected column names
     column_mapping = {
         'course_id': 'course_id',
         'name': 'course_name',
@@ -203,8 +172,7 @@ def recommend_courses_by_interests(user_prefs, df):
         'course_description': 'course_description',
         'skills': 'skills'
     }
-    
-    # Only rename columns that exist
+  
     rename_dict = {col: column_mapping[col] for col in result_df.columns if col in column_mapping}
     result_df = result_df.rename(columns=rename_dict)
     
@@ -325,63 +293,34 @@ def filter_dataframe_function(df, difficulty_level=None, min_rating=None, max_ra
             
     return filtered_df
 
-# def books_id_recommended(description, vectorizer, vectors, number_of_recommendation=5):
-#     min_similarity = 0.075
-#     description = [PreprocessTexte(description)]
-#     vect = vectorizer.transform(description)
-#     similars_vectors = cosine_similarity(vect, vectors)[0]
-    
-#     # Convert to numpy array if not already
-#     similars_vectors = np.array(similars_vectors)
-    
-#     # Get indices that would sort the array in ascending order
-#     ordered_indices = np.argsort(similars_vectors)
-    
-#     # Get the actual similarity scores in descending order
-#     sorted_scores = similars_vectors[ordered_indices][::-1]
-    
-#     # Count how many scores meet the minimum similarity threshold
-#     valid_recommendations = np.sum(sorted_scores >= min_similarity)
-    
-#     # Get the indices of top N recommendations that meet the threshold
-#     n_recommendations = min(number_of_recommendation, max(1, valid_recommendations))
-#     best_indices = ordered_indices[::-1][:n_recommendations]
-    
-#     return best_indices.tolist()
+
 
 def books_id_recommended(description, vectorizer, vectors, number_of_recommendation=5, return_scores=False):
     try:
-        print("DEBUG: Starting books_id_recommended")  # Debugging
-        min_similarity = 0.075  # Lowered from 0.1 to get more recommendations
+        print("DEBUG: Starting books_id_recommended")  
+        min_similarity = 0.075  
         
         description = [PreprocessTexte(description)]
         vect = vectorizer.transform(description)
         
         similars_vectors = cosine_similarity(vect, vectors)[0]
-        print(f"DEBUG: Similarity scores range: {similars_vectors.min():.3f} to {similars_vectors.max():.3f}")  # Debugging
+        print(f"DEBUG: Similarity scores range: {similars_vectors.min():.3f} to {similars_vectors.max():.3f}")  
         
-        # Convert to numpy array if not already
         similars_vectors = np.array(similars_vectors)
         
-        # Get indices that would sort the array in ascending order
         ordered_indices = np.argsort(similars_vectors)
-        
-        # Get the actual similarity scores in descending order
         sorted_scores = similars_vectors[ordered_indices][::-1]
-        
-        # Count how many scores meet the minimum similarity threshold
         valid_recommendations = np.sum(sorted_scores >= min_similarity)
-        print(f"DEBUG: Found {valid_recommendations} recommendations above threshold {min_similarity}")  # Debugging
+        print(f"DEBUG: Found {valid_recommendations} recommendations above threshold {min_similarity}")  
         
         if valid_recommendations == 0:
-            print("DEBUG: No recommendations meet similarity threshold, using top 5")  # Debugging
+            print("DEBUG: No recommendations meet similarity threshold, using top 5")  
             n_recommendations = min(5, len(sorted_scores))
         else:
-            # Get the indices of top N recommendations that meet the threshold
             n_recommendations = min(number_of_recommendation, max(1, valid_recommendations))
         
         best_indices = ordered_indices[::-1][:n_recommendations]
-        print(f"DEBUG: Returning {len(best_indices)} indices")  # Debugging
+        print(f"DEBUG: Returning {len(best_indices)} indices") 
         
         if return_scores:
             return best_indices.tolist(), sorted_scores[:n_recommendations].tolist()
@@ -390,7 +329,7 @@ def books_id_recommended(description, vectorizer, vectors, number_of_recommendat
     except Exception as e:
         print(f"Error in books_id_recommended: {str(e)}")
         import traceback
-        traceback.print_exc()  # Print full traceback
+        traceback.print_exc()  
         return ([], []) if return_scores else []
 
 def find_top_k_indices(df, k):
@@ -401,53 +340,41 @@ def find_top_k_indices(df, k):
 def process_user_profile(user_id, vectorizer):
     from .models import UserProfile
     
-    # Get user profile from database
     user_profiles = UserProfile.objects.filter(user_id=user_id)
-    
-    # Convert to DataFrame
     user_df = pd.DataFrame.from_records(user_profiles.values())
     
     if user_df.empty:
         raise ValueError(f"No profile found for user {user_id}")
 
-    # Drop duplicates
     user_df.drop_duplicates(inplace=True)
-
-    # Merge key features into description_key_words
     features_selected_for_merging = ["course_name", "course_description", "skills"]
     user_df["description_key_words"] = user_df[features_selected_for_merging].apply(
         lambda x: ' '.join(str(val) for val in x), axis=1
     )
     
-    # Preprocess text
     user_df["description_key_words"] = user_df["description_key_words"].apply(PreprocessTexte)
-
-    # Use the same vectorizer that was used for the main corpus
     user_vectors = vectorizer.transform(user_df["description_key_words"]).toarray()
 
-    # Scale ratings
     user_rating = user_df['course_rating']
     user_rating_scaled = (user_rating - 1) / 4
     user_rating_scaled = user_rating_scaled.tolist()
 
-    # Weight user vectors by scaled ratings
+
     user_vectors_with_review = user_vectors * np.array(user_rating_scaled).reshape(-1, 1)
 
     return user_df, user_vectors, user_vectors_with_review
 
 def recommend_courses(user_id, main_vectors, df):
-    # Create and fit vectorizer on main corpus first
     vectorizer = CustomTFIDFVectorizer(max_features=10000, stop_words='english')
     main_vectors = vectorizer.fit_transform(df["description_key_words"])
     
-    # Process the user profile using the same vectorizer
     user_df, user_vectors, user_vectors_with_review = process_user_profile(user_id, vectorizer)
 
-    # Calculate cosine similarity
+    
     similars_vectors = cosine_similarity(main_vectors, user_vectors_with_review)
     similars_vectors_df = pd.DataFrame(similars_vectors)
 
-    # Find indices of matching courses
+   
     df_course_id_to_index = {course_id: idx for idx, course_id in enumerate(df['course_id'])}
     user_course_id_to_index = {course_id: idx for idx, course_id in enumerate(user_df['course_id'])}
     
@@ -457,13 +384,39 @@ def recommend_courses(user_id, main_vectors, df):
         if course_id in user_course_id_to_index
     ]
 
-    # Find top indices
     top_indices = find_top_k_indices(similars_vectors_df, 21)
     filtered_top_indices = [index for index in top_indices if index not in matching_indices]
     top_10_indices = filtered_top_indices[:10]
     top_10_rows = [row for row, col in top_10_indices[:10]]
 
     return top_10_rows
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def recommend_courses(user_interests, df):
     """
@@ -475,27 +428,25 @@ def recommend_courses(user_interests, df):
         DataFrame with recommended courses
     """
     try:
-        print("DEBUG: Starting recommend_courses")  # Debugging
-        print(f"DEBUG: Input DataFrame shape: {df.shape}")  # Debugging
+        print("DEBUG: Starting recommend_courses")  
+        print(f"DEBUG: Input DataFrame shape: {df.shape}")  
         
-        # Preprocess user interests
+       
         user_interests = PreprocessTexte(user_interests)
-        print(f"DEBUG: Preprocessed user interests: {user_interests[:100]}...")  # Debugging
+        print(f"DEBUG: Preprocessed user interests: {user_interests[:100]}...")  
         
-        # Create TF-IDF vectors
+        
         vectorizer = CustomTFIDFVectorizer(stop_words='english')
         
-        # Ensure description_key_words exists
+        
         if 'description_key_words' not in df.columns:
-            print("DEBUG: Creating description_key_words column")  # Debugging
+            print("DEBUG: Creating description_key_words column")  
             df = preprocess_courses(df)
         
-        print(f"DEBUG: Number of non-empty description_key_words: {df['description_key_words'].str.strip().str.len().gt(0).sum()}")  # Debugging
+        print(f"DEBUG: Number of non-empty description_key_words: {df['description_key_words'].str.strip().str.len().gt(0).sum()}")  
         
         course_vectors = vectorizer.fit_transform(df["description_key_words"])
-        print(f"DEBUG: Created course vectors with shape: {course_vectors.shape}")  # Debugging
-        
-        # Get recommended course indices
+        print(f"DEBUG: Created course vectors with shape: {course_vectors.shape}")  
         recommended_indices, similarity_scores = books_id_recommended(
             user_interests, 
             vectorizer, 
@@ -504,21 +455,21 @@ def recommend_courses(user_interests, df):
             return_scores=True
         )
         
-        print(f"DEBUG: Got {len(recommended_indices)} recommended indices with scores: {similarity_scores[:5]}")  # Debugging
+        print(f"DEBUG: Got {len(recommended_indices)} recommended indices with scores: {similarity_scores[:5]}")  
         
         if not recommended_indices:
-            print("DEBUG: No recommended indices returned")  # Debugging
+            print("DEBUG: No recommended indices returned")  
             return pd.DataFrame()
             
-        # Get recommended courses
+        
         recommendations = df.iloc[recommended_indices].copy()
         recommendations['similarity_score'] = similarity_scores
         
-        # Sort by similarity score
-        recommendations = recommendations.sort_values('similarity_score', ascending=False)
-        print(f"DEBUG: Final recommendations shape: {recommendations.shape}")  # Debugging
         
-        # Drop the similarity score and description_key_words columns
+        recommendations = recommendations.sort_values('similarity_score', ascending=False)
+        print(f"DEBUG: Final recommendations shape: {recommendations.shape}")  
+        
+       
         recommendations = recommendations.drop(['similarity_score', 'description_key_words'], axis=1, errors='ignore')
         
         return recommendations

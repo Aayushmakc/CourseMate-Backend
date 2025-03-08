@@ -36,7 +36,6 @@ class SignupSerializer(serializers.Serializer):
             last_name=validated_data['last_name']
         )
         
-        # Generate tokens
         refresh = RefreshToken.for_user(user)
         validated_data['tokens'] = {
             'refresh': str(refresh),
@@ -55,7 +54,6 @@ class SignupSerializer(serializers.Serializer):
                 'last_name': instance.last_name
             }
         }
-        # Add tokens if they were generated
         if hasattr(self, 'validated_data') and 'tokens' in self.validated_data:
             data['tokens'] = self.validated_data['tokens']
         
@@ -68,7 +66,6 @@ class LoginSerializer(serializers.Serializer):
     def validate(self, data):
         user = User.objects.filter(email=data['email']).first()
         if user and user.check_password(data['password']):
-            # Generate tokens
             refresh = RefreshToken.for_user(user)
             data['tokens'] = {
                 'refresh': str(refresh),
@@ -89,13 +86,12 @@ class CourseSerializer(serializers.ModelSerializer):
         ]
         
     def validate(self, data):
-        # Set default values for optional fields
         if 'difficulty' not in data:
             data['difficulty'] = None
         if 'rating' not in data:
             data['rating'] = None
         if 'url' not in data:
-            data['url'] = 'http://example.com'  # Default URL
+            data['url'] = 'http://example.com'  
         if 'description' not in data:
             data['description'] = None
         if 'skills' not in data:
